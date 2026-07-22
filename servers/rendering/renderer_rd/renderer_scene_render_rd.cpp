@@ -1163,13 +1163,7 @@ RID RendererSceneRenderRD::render_buffers_get_default_voxel_gi_buffer() {
 }
 
 RD::DataFormat RendererSceneRenderRD::_render_buffers_get_preferred_color_format() {
-	// SPIKE (display-space additive): this is the real Forward+ 3D color
-	// attachment format. The stock float format never clamps, so blend_add
-	// accumulates in linear HDR and runs past white. A UNORM format makes the
-	// hardware additive blend saturate at 1.0 in the attachment -- the same
-	// "free clamp" the Mobile renderer gets. Throwaway: caps HDR range feeding
-	// glow/tonemap, but proves the color-space/clamp mechanism in Forward+.
-	return RD::DATA_FORMAT_R16G16B16A16_UNORM;
+	return RD::DATA_FORMAT_R16G16B16A16_SFLOAT;
 }
 
 bool RendererSceneRenderRD::_render_buffers_can_be_storage() {
@@ -1880,6 +1874,7 @@ void RendererSceneRenderRD::init() {
 	bokeh_dof = memnew(RendererRD::BokehDOF(!can_use_storage));
 	copy_effects = memnew(RendererRD::CopyEffects(raster_effects));
 	debug_effects = memnew(RendererRD::DebugEffects);
+	display_space_additive = memnew(RendererRD::DisplaySpaceAdditive); // SPIKE 2
 	luminance = memnew(RendererRD::Luminance(!can_use_storage));
 	smaa = memnew(RendererRD::SMAA);
 	tone_mapper = memnew(RendererRD::ToneMapper(!can_use_storage));
@@ -1901,6 +1896,7 @@ RendererSceneRenderRD::~RendererSceneRenderRD() {
 	memdelete(bokeh_dof);
 	memdelete(copy_effects);
 	memdelete(debug_effects);
+	memdelete(display_space_additive); // SPIKE 2
 	memdelete(luminance);
 	memdelete(smaa);
 	memdelete(tone_mapper);

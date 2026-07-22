@@ -2549,6 +2549,24 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 		RENDER_TIMESTAMP("Tonemap");
 
 		_render_buffers_post_process_and_tonemap(p_render_data);
+
+		// SPIKE 2 (display-space additive): draw test quads into the post-tonemap
+		// UNORM render target with hardware additive blend + depth-test against the
+		// scene depth. Because the target already holds sRGB-encoded scene color and
+		// is a plain UNORM buffer, the add happens in gamma space and clamps at 1.0.
+		// Guarded to the simple case (no upscaling, single view) to keep the color
+		// target and scene depth the same size / layer count. Throwaway; see
+		// docs/display-space-additive-blending.md.
+		if (display_space_additive != nullptr && rb->get_view_count() == 1 && rb->get_internal_size() == rb->get_target_size()) {
+			RendererRD::TextureStorage *texture_storage = RendererRD::TextureStorage::get_singleton();
+			RID color_texture = texture_storage->render_target_get_rd_texture(rb->get_render_target());
+			RID depth_texture = rb->get_depth_texture();
+			if (color_texture.is_valid() && depth_texture.is_valid()) {
+				RENDER_TIMESTAMP("Display-space additive (SPIKE)");
+				RID additive_fb = FramebufferCacheRD::get_singleton()->get_cache_multiview(rb->get_view_count(), color_texture, depth_texture);
+				display_space_additive->draw(additive_fb, p_render_data->scene_data->cam_projection, p_render_data->scene_data->cam_transform);
+			}
+		}
 	}
 
 	if (rb_data.is_valid()) {

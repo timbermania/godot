@@ -1,6 +1,6 @@
 # Forward+ display-space (gamma-space) additive blending
 
-**Status:** 🟡 Spike complete — mechanism proven, no shippable feature yet
+**Status:** 🟢 Spike 2 complete — gamma-space add + clamp + depth occlusion proven end-to-end in Forward+; ready to design the material-facing API (shape #1)
 **Branch:** `spike/forward-plus-display-space-additive`
 **Owner:** Aaron Curry
 **Last updated:** 2026-07-21
@@ -92,29 +92,87 @@ Mobile gets, confirmed on real hardware.
 - Faithful gamma-space add still needs **shape #1** (blend flagged transparents into a
   **post-tonemap display-encoded** target).
 
+### Spike 2 — gamma-space add end-to-end (2026-07-21) ✅
+
+**Goal:** prove *true* gamma-space additive (not just clamp) via a hand-wired
+post-tonemap geometry pass, and de-risk the two shape-#1 unknowns (pipeline format
+key, depth attachment) before building any material-facing API.
+
+**What was built** (self-contained `DisplaySpaceAdditive` effect, ~1 shader + 1 class):
+- New GLSL effect shader `shaders/effects/display_space_additive.glsl` — draws
+  world-space quads, emits display-space color directly (no tonemap, no sRGB encode).
+- New effect `effects/display_space_additive.{h,cpp}` — owns its pipeline; blend =
+  `BLEND_OP_ADD` (src=ONE, dst=ONE); depth-stencil = test on, **write off**,
+  `COMPARE_OP_GREATER_OR_EQUAL`. Draws a fixed set of test quads.
+- Wired into `render_forward_clustered.cpp` right after
+  `_render_buffers_post_process_and_tonemap()`: builds a framebuffer from
+  `[render_target_get_rd_texture()` (UNORM) + `get_depth_texture()]` and draws.
+  Guarded to the simple case (single view, internal size == target size).
+
+**Key facts nailed down:**
+- The post-tonemap render target is **`R8G8B8A8_UNORM` (not `_SRGB`)** — the tonemap
+  shader writes sRGB-*encoded* values into a plain UNORM buffer. So `BLEND_OP_ADD` there
+  adds gamma-encoded values and clamps at 1.0 = **true gamma-space add**. (An `_SRGB`
+  attachment would blend in *linear* per the Vulkan spec — the opposite of what we want.)
+- The MVP must bake Godot's depth-correction: `correction * cam_projection * view`, where
+  `Projection::set_depth_correction(true)` applies the **Y-flip + reverse-Z remap** the
+  scene depth buffer was written with. Without it: two bugs surfaced in order — (1) a raw
+  `projection*view` renders upside-down (Vulkan NDC +Y is down); (2) even after a manual
+  Y-flip, occlusion failed because the *depth* wasn't reverse-Z-remapped. `set_depth_correction`
+  fixes both at once. Mirrors `RenderSceneDataRD::get_*_projection`.
+- **Pipeline format key is a non-issue for a dedicated shader:** `PipelineCacheRD` compiles
+  the variant for the `[display color + depth]` framebuffer format lazily on first draw. No
+  scene-material-variant surgery needed. (A *material-facing* API would still need scene
+  shaders compiled for the display framebuffer — but the mechanism itself is proven.)
+
+**Result (single frame, Forward+, RTX 5090):**
+
+![spike2](assets/additive-spike2-gamma-occlusion.png)
+
+- Two 0.5-gray additive quads overlap into a **pure white** strip (0.5 + 0.5 = 1.0 in
+  gamma; a linear add would give a muddy ~0.68 gray). Wings stay gray. → **gamma-space add**.
+- The strip **saturates at white**, doesn't run away. → **clamp at 1.0**.
+- A cyan quad parked *behind* an opaque wall is **fully occluded**. → **depth-test against
+  the opaque scene works** post-tonemap.
+
+**Proven:** a post-tonemap geometry pass into the UNORM render target with HW additive
+blend + scene-depth test gives faithful gamma-space additive **with correct occlusion** in
+Forward+. This is shape #1's engine mechanism, minus the material API.
+
+**Still not a feature:** quads/colors are hardcoded in the effect; there's no `render_mode`,
+no material routing, no multiview/upscaling support, and it always runs. Next step is the
+material-facing API.
+
 ---
 
-## Recommended next step — shape #1 prototype
+## Recommended next step — material-facing API (shape #1 productization)
 
-Route only *flagged* transparents into a display-encoded attachment blended after tonemap,
-then composite. Open questions this prototype must answer:
+The rendering mechanism is proven (Spike 2). What remains is exposing it to materials:
 
-- [ ] **Pipeline format key.** Scene shader pipelines are compiled per framebuffer format.
-      A second geometry pass into a UNORM/sRGB post-tonemap target needs those pipelines
-      recompiled for that format. How invasive? (Look at `scene_shader_forward_clustered`
-      pipeline variant keys.)
-- [ ] **Depth.** The 2nd (display-space) alpha pass needs a compatible depth attachment
-      for correct sorting/occlusion against the opaque scene, post-tonemap.
-- [ ] **Material seam.** New `render_mode` (e.g. `blend_add_display`) → a new `BlendMode`
-      enum value → routed into a separate render list. Where does the split happen in
-      `render_forward_clustered`'s list fill (`RENDER_LIST_ALPHA`, ~line 1151)?
-- [ ] **sRGB vs UNORM-linear target.** For true gamma-space add the target must store
-      *display-encoded* (sRGB) values, i.e. the additive geometry writes post-tonemap
-      color. Confirm the encode point.
-- [ ] **Upstream framing.** No godot-proposal frames this as blend *space*. Consider
-      filing one to fill that gap (distinct from #7058 / #102366 which are blend *mode*).
+- [x] ~~Pipeline format key~~ — dedicated shader sidesteps it; `PipelineCacheRD` keys on the
+      display+depth framebuffer format automatically. (Material path still needs scene-shader
+      variants for the display framebuffer — see below.)
+- [x] ~~Depth attachment post-tonemap~~ — `[RT color + get_depth_texture()]` framebuffer +
+      `set_depth_correction` MVP. Occlusion confirmed.
+- [x] ~~sRGB vs UNORM target~~ — target is plain `R8G8B8A8_UNORM`; shader emits gamma color
+      directly. `_SRGB` would (wrongly) blend in linear.
+- [ ] **Material seam.** New `render_mode` (e.g. `blend_add_display` / `blend_sub_display`) →
+      new `BlendMode` enum value → split those instances out of `RENDER_LIST_ALPHA` into a new
+      display-space render list (`render_forward_clustered` list fill, ~line 1151).
+- [ ] **Scene-shader variants for the display framebuffer.** Real materials (not a fixed
+      shader) need their pipelines compiled against the `[UNORM color + depth]` format — a new
+      `COLOR_PASS_FLAG_*`-style variant in `scene_shader_forward_clustered`. This is the one
+      piece Spike 2 deliberately sidestepped with a dedicated shader.
+- [ ] **Multiview / upscaling / MSAA.** Spike 2 guards these out. Productization must handle
+      XR (per-view MVP) and the scaling/SMAA path where tonemap writes to an intermediate.
+- [ ] **Upstream framing.** No godot-proposal frames this as blend *space*. Consider filing
+      one to fill that gap (distinct from #7058 / #102366 which are blend *mode*).
 
-## Reproduce the spike
+## Reproduce Spike 1 (mechanism proof)
+
+Spike 2 lives in the engine source on this branch (build + run any Forward+ scene, single
+view, no upscaling; the hardcoded quads draw automatically). The snippet below reproduces
+Spike 1's global-flip A/B instead.
 
 ```gdscript
 # main.gd — attach to a Node3D main scene, Forward+ renderer.
@@ -149,3 +207,9 @@ Build: `scons platform=linuxbsd target=editor dev_build=yes -jN` (~3 min on this
 
 - **2026-07-21** — Initial assessment + Spike 1 (mechanism proof, UNORM attachment). Clamp
   mechanism proven; shape #1 recommended for the real feature.
+- **2026-07-21** — Spike 2: hand-wired post-tonemap `DisplaySpaceAdditive` pass. Proved true
+  gamma-space add + clamp + depth occlusion in Forward+ (Spike 1's global flip reverted).
+  Both shape-#1 rendering unknowns (pipeline format key, depth attachment) de-risked; the
+  remaining work is the material-facing API. Files: `shaders/effects/display_space_additive.glsl`,
+  `effects/display_space_additive.{h,cpp}`, wired in `render_forward_clustered.cpp` +
+  `renderer_scene_render_rd.{h,cpp}`.
