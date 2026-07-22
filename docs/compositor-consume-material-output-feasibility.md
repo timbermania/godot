@@ -340,9 +340,35 @@ add-front→0.6) — the engine drew add-first/sub-last per priority, **ignoring
 frame 40 (temporal stable); no validation errors. The ordered-array submission model holds on hardware
 with a smaller diff than the scene-tree-routing spike.
 
+### Spike 3 — real MultiMesh transport: per-instance prim data + run ordering (2026-07-22) 🟢 PASS
+
+**Goal:** close design item #5 — prove the fold works with the *actual* transport the FFT game uses
+(one MultiMesh whose instance buffer **is** the ordered prim array, per-prim data in per-instance custom
+data), not the `MeshInstance3D` stand-ins Spike 2 used, and that it composes with cross-run priority order.
+
+**No engine change** — GDScript/shader only. A flagged `MultiMesh` (`use_custom_data = true`) carries one
+prim per instance; the material reads `INSTANCE_CUSTOM.rgb` in `vertex()` and forwards it to `fragment()`
+via a varying (INSTANCE_CUSTOM is a vertex-stage builtin — reading it directly in fragment fails to
+compile). Runs are separate MultiMeshes with distinct `render_priority`.
+
+| Scene | Setup | Predicted (R) | Observed (R) | ✓ |
+|---|---|---|---|---|
+| `mm_add_last` | sub-run(0.3) p1 + add-run(**2 insts** 0.3+0.3) p2, same depth | 0.60 | **0.6002** | per-instance data sums within run; add folds last |
+| `mm_sub_last` | add-run p1 + sub-run p2 (swapped priority) | 0.30 | **0.3001** | same two runs, priority-swapped |
+
+**Proves three things together:** (1) a flagged MultiMesh **routes into the fold** and creates the scratch;
+(2) **per-instance `INSTANCE_CUSTOM` data flows through** — the add-run's two instances each carrying 0.3
+summed to 0.6, so per-prim data is read per instance and shaded through the real material; (3) **cross-run
+`render_priority` order holds with real MultiMeshes** (0.60 ≠ 0.30 on swap). This is the FFT transport
+end-to-end (instance buffer = ordered prim array, per-instance custom data, priority = run order). The only
+remaining unknown is the game-side *staging* API (writing the 24-float records), not the engine fold path.
+
 ---
 
 ## Change log
+- **2026-07-22** — Spike 3 **verified on-GPU** (Forward+): closed design item #5 — the fold works with the
+  real MultiMesh transport (instance buffer = ordered prim array, per-prim color in `INSTANCE_CUSTOM` via a
+  varying) composed with cross-run `render_priority` ordering. No engine change; GDScript/shader only.
 - **2026-07-22** — Spike 2 **verified on-GPU** (Forward+): ordered-array submission — the fold list now
   sorts by caller `render_priority` only (`sort_by_priority()` replaces `sort_by_reverse_depth_and_priority()`),
   so the engine folds in the game's submitted order, not camera depth. Probe across 3 scenes proved

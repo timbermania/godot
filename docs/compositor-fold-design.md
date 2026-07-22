@@ -168,8 +168,13 @@ can read."* Everything PSX-specific stays in the project.
 5. **Instanced prim path (in submission order)** — thousands of prims arrive as instanced *runs*, not
    scene-tree nodes. "MultiMesh" is only the *buffer vehicle* (the instance-buffer layout as a transport
    for per-prim data), not a logical concept the engine needs. The engine needs only "instanced draw of
-   prims through a material, with per-instance data, **in array order**." The current spike routes
-   per-surface scene instances; this needs genuine design. *Not built.*
+   prims through a material, with per-instance data, **in array order**."
+   ✅ **Prototyped & verified on-GPU (Forward+), 2026-07-22** (feasibility §8, Spike 3): a flagged
+   `MultiMesh` (instance buffer = the ordered prim array; per-prim color in `INSTANCE_CUSTOM`, forwarded
+   to the fragment via a varying) routes into the fold, per-instance data shades correctly (two additive
+   instances summed to 0.6 within one run), and cross-run `render_priority` order holds with real
+   MultiMeshes. Remaining is the *staging* API (how the game writes the 24-float records into the
+   instance buffer), not the engine fold path.
 
 Follow-ups already noted in feasibility §8: `blend_sub` scratch-seeding (subtractive from a black base
 clamps to 0).
