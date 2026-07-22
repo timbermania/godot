@@ -33,6 +33,40 @@ for this need — it is over-engineered, unowned, and stalled.**
 
 ---
 
+> ## ⚠️ Correction (2026-07-22) — grounded against the *shipped* FFT compositor
+>
+> This doc's §2 "reframe" (the engine draws the flagged materials into a clamping attachment; the
+> compositor just *reads* the fold) was reasoned **before** reading the actual consumer. Having now read
+> `CombatDisplaySpaceComposite.gd` + `OTDepthPrimOrder.gd`:
+>
+> - **The per-prim depth+age sort exists and is active** (`OTDepthPrimOrder.order()`, radix: depth-bucket
+>   far→near then age newest-on-top — the DEMI2/E046 fix). It feeds the fold in depth order.
+> - **The compositor's fold is a 3-pass, scene-seeded, DISPLAY-space operation**, not a black-from-scratch
+>   linear accumulate: **(A)** copy scene → scratch (linear→display, coverage=0); **(B)** hardware-blend the
+>   depth-ordered runs onto it (UNORM clamp; depth-tested vs opaque scene); **(C)** copy back (display→linear
+>   + RGB555 quantize, discard untouched). The §2 conclusion that "the engine should *do the fold*" therefore
+>   **does not reproduce the shipped result** (it drops the scene seed, the display-space round-trip, the
+>   quantize, and the coverage composite). The compositor's Pass B needs **shaded prims to draw**, not a
+>   finished flat buffer to read.
+> - **R1 is real and LARGE — the motivating case is the *unit* shader, not the particle fold.** (An earlier
+>   version of this note wrongly called R1 "narrow" after looking only at `combat_displayspace_composite.glsl`,
+>   which shades simple sprite-sheet particles. That was wrong.) Units are drawn by `unit.gdshader` →
+>   `unit_sprite_body.gdshaderinc` — **939 lines** plus nested PSX includes (`psx_ot_depth`,
+>   `psx_color_stack`, `psx_par`, palette, dither): up to 10 composited tiles per layer × 3 layers
+>   (body/weapon/effect), each with atlas rect, screen loc, H/V flip, rotation-around-pivot, palette;
+>   plus billboarding, shadow, PAR correction, OT depth. **Rendering a unit through the compositor would
+>   require hand-porting all of that to raw GLSL and keeping it byte-synced forever** — which is exactly the
+>   R1 wall. So "let the engine draw the flagged materials through their real pipeline" is *well* motivated;
+>   the correction is only about the fold's SHAPE (below), not about whether the engine should shade.
+> - **The engine's real job:** draw units + effect prims through their *real* Godot materials, in
+>   `OTDepthPrimOrder` depth+age order, into a **scene-seeded, DISPLAY-space** fold (the compositor's Pass
+>   A/B/C) — NOT from-black-in-linear as the spike did. Whether the engine performs the whole fold or just
+>   hands the compositor shaded prims for its Pass B is the open shape question. Treat §2/§4-#1's
+>   from-black/linear framing as provisional; the shade-through-real-materials core stands.
+>   **→ The corrected, grounded plan is now written up: [`engine-shaded-display-fold.md`](./engine-shaded-display-fold.md).**
+
+---
+
 ## 1. The two walls, re-verified against the 4.8 tree
 
 | Wall | Handoff claim (vs 4.6) | Status in **4.8** (this checkout) | Evidence |

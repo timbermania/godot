@@ -13,6 +13,33 @@
 
 ---
 
+> ## ⚠️ Correction (2026-07-22) — grounded against the *shipped* FFT compositor
+>
+> After reading the actual consumer — `src/effects/CombatDisplaySpaceComposite.gd` and
+> `src/effects/OTDepthPrimOrder.gd` in `fft-monorepo-compositor/godot-learning` — two things need
+> flagging before trusting the rest of this doc:
+>
+> 1. **The per-prim depth+age sort is real and active.** `OTDepthPrimOrder.order()` is an LSD radix
+>    (depth-bucket far→near primary, then **age** newest-on-top secondary — the DEMI2 / E046 fix that
+>    keeps the white additive core over the black subtractive). This doc's ordering model (§2, §4)
+>    matches it. *(Any transcript remark of mine claiming "no per-prim sort / fixed mode buckets" was
+>    wrong — it came from a stale "slice A" comment in the compositor header; `OTDepthPrimOrder` is the
+>    newer #219/#220 replacement that emits prims in depth order.)*
+>
+> 2. **End-state A ("engine owns the fold") diverges from the real compositor — REOPENED.** The shipped
+>    fold is a **3-pass, scene-seeded, DISPLAY-space** operation: **(A) copy-in** scene color → owned
+>    scratch, linear→display, coverage=0; **(B) fold** the depth+age-ordered *runs* onto it with hardware
+>    add/sub blend (UNORM saturation = per-prim clamp), depth-tested vs the opaque scene; **(C) out**
+>    scratch → scene, display→linear + RGB555 quantize, discarding untouched pixels. The spike's
+>    engine-fold draws flagged materials **from black, in an isolated LINEAR scratch** — it does **not**
+>    reproduce the scene seed (A), the display-space round-trip, the RGB555 quantize, or the coverage
+>    composite (C). So "who owns the fold" (§8; feasibility §6) is **reopened** pending a grounded
+>    re-derivation of what the engine should actually hand this compositor (its Pass B needs *shaded
+>    prims*, not a finished flat buffer). Treat §3 / §8's "engine folds" framing as provisional below.
+>    **→ The re-derivation is now written up as the current plan: [`engine-shaded-display-fold.md`](./engine-shaded-display-fold.md).**
+
+---
+
 ## 1. The goal (one paragraph)
 
 A project shades transparent "prims" with a Godot `ShaderMaterial` (`.gdshader`) and needs a
