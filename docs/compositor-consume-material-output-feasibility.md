@@ -10,6 +10,7 @@
 > Deliverable for the handoff at `/tmp/handoff-godot-compositor-consume-material-output.md`.
 > Companion (blend-*space*) effort: `../godot` @ `spike/forward-plus-display-space-additive`,
 > `docs/display-space-additive-blending.md`. **The two efforts converge — see §2.**
+> **Agreed architecture → `compositor-fold-design.md`** (this doc is *why/can-we*; that one is *what we're building*).
 
 ---
 
