@@ -2575,9 +2575,20 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 		// additive blend adds in gamma space and clamps at 1.0. Depth-tests against the
 		// scene depth for correct occlusion. The scene shader's own (corrected) projection
 		// UBO handles Y-flip + reverse-Z, so no manual correction is needed here.
-		// Guarded to the simple case (single view, no upscaling) so the color target and
-		// scene depth share size / layer count.
-		if (display_additive_rp_uniform_set.is_valid() && rb->get_view_count() == 1 && rb->get_internal_size() == rb->get_target_size() && render_list[RENDER_LIST_DISPLAY_ADDITIVE].elements.size() > 0) {
+		//
+		// Multiview (view_count > 1) is supported: rt->color and get_depth_texture() are
+		// both layered per view, the uniform set above is built is_multiview-aware, and the
+		// draw passes scene_data->view_count, so the framebuffer + MULTIVIEW shader variant
+		// line up. (Not yet exercised on an XR runtime.)
+		//
+		// Upscaling (internal_size != target_size) is deliberately NOT handled here: after
+		// tonemap the display-encoded color lives at target_size while the scene depth stays
+		// at internal_size, and a render pass requires all attachments to share dimensions —
+		// so there is no target-size depth to test against post-tonemap. Making it work needs
+		// the pass to draw into the tonemap intermediate (display-encoded, internal_size) with
+		// internal-size depth *before* the spatial upscale, which is a reorder of the shared
+		// post-process path. See docs/display-space-additive-blending.md.
+		if (display_additive_rp_uniform_set.is_valid() && rb->get_internal_size() == rb->get_target_size() && render_list[RENDER_LIST_DISPLAY_ADDITIVE].elements.size() > 0) {
 			RendererRD::TextureStorage *texture_storage = RendererRD::TextureStorage::get_singleton();
 			RID color_texture = texture_storage->render_target_get_rd_texture(rb->get_render_target());
 			RID depth_texture = rb->get_depth_texture();

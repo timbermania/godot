@@ -1,6 +1,6 @@
 # Forward+ display-space (gamma-space) additive blending
 
-**Status:** 🟢 Spike 3 complete + accumulation fixed + sRGB-encode fidelity done — material-facing `render_mode display_additive` works end-to-end (routing + post-tonemap draw + faithful gamma-space add + occlusion, no crashes, stable on static scenes). Remaining: multiview/scaling/MSAA, blend_sub + mobile, upstream proposal.
+**Status:** 🟢 Feature works end-to-end for the common case — material-facing `render_mode display_additive`: routing + post-tonemap draw + faithful gamma-space (sRGB) add + occlusion, stable on static scenes, multiview-enabled. Upscaling is guarded (degrades gracefully) pending an architectural decision (see "Upscaling incompatibility"). Remaining: upscaling/MSAA design, `blend_sub` + mobile, upstream proposal.
 **Branch:** `spike/forward-plus-display-space-additive`
 **Owner:** Aaron Curry
 **Last updated:** 2026-07-21
@@ -207,13 +207,47 @@ both frame 2 and frame 40 (previously frame 40 was `[1.000, 1.000, 1.000]`).
       at 1.0. Verified numerically: green ramp `{0.1,0.3,0.6}` moved from raw `[0.169,0.369,0.671]`
       (linear emit) to `[0.420,0.655,0.867]` — exactly `bg(0.069) + linear_to_srgb{0.349,0.584,0.795}`.
       Uses a spec constant (not a new `COLOR_PASS_FLAG`), so it costs one variant, not a variant matrix.
-- [ ] **Multiview / upscaling / MSAA.** Still guarded out (single view, internal==target size).
-      Handle XR (per-view) and the scaling/SMAA path (tonemap → intermediate).
+- [x] ~~**Multiview**~~ — enabled. `rt->color` and `get_depth_texture()` are both layered per view,
+      the pass uniform set is built `is_multiview`-aware, and the draw passes `scene_data->view_count`,
+      so the framebuffer + MULTIVIEW shader variant line up. Guard relaxed from `view_count == 1` to
+      just `internal_size == target_size`. **Not yet verified on an XR runtime** (none available) —
+      mechanically consistent with the alpha pass's multiview path.
+- [ ] **Upscaling / MSAA — blocked by a real architectural constraint (see below).** Deliberately
+      still guarded to `internal_size == target_size`. Verified it degrades gracefully: with
+      `scaling_3d_scale < 1` the pass skips, quads simply don't draw, no Vulkan validation errors,
+      clean exit. This is the correct interim behavior until the reorder below is designed.
 - [ ] **`blend_sub` display variant + mobile.** `blend_sub` should work by the same routing;
       the mobile renderer needs the render_mode registered (or explicitly rejected) so mobile
       shader compiles don't choke on `display_additive`.
 - [ ] **Upstream framing.** No godot-proposal frames this as blend *space*. Consider filing
       one to fill that gap (distinct from #7058 / #102366 which are blend *mode*).
+
+## Upscaling incompatibility — why, and the options (owner decision)
+
+Verified against the tree (`renderer_scene_render_rd.cpp` post-process/tonemap path):
+
+- **No upscaling (`internal == target`):** tonemap writes straight into `rt->color` @ target_size;
+  the scene depth is also target_size. Color + depth match → the depth-tested additive pass works.
+  This is what ships today.
+- **Upscaling active (`internal < target`):** tonemap writes to a *temporary* display-encoded UNORM
+  intermediate @ **internal** size, which the spatial upscaler then blits to `rt->color` @ **target**
+  size. But the scene depth stays @ **internal** size. So *after* tonemap the only display-encoded
+  full-res color (`rt->color`) has **no matching-res depth** — and a Vulkan render pass requires all
+  attachments to share dimensions. There is no target-size depth to occlude against post-tonemap.
+
+Three ways forward (not yet chosen):
+
+- **A — draw before the upscale (recommended).** Slot the additive pass into the post-process path
+  *between* the tonemap-to-intermediate write and the spatial upscale, drawing into the intermediate
+  (display-encoded UNORM, internal_size) with the internal-size depth. Occlusion is correct and the
+  result gets upscaled along with everything else. Cost: the pass must move inside/around
+  `_render_buffers_post_process_and_tonemap` (a *shared*, multi-renderer function) — a reorder/hook,
+  and the intermediate must be reachable. Cleanest result, most plumbing.
+- **B — resolve depth to target_size.** Upscale/copy the depth to target_size and draw the additive
+  pass into `rt->color` at full res. Extra depth resolve every frame; upscaled depth is approximate so
+  occlusion edges soften. Simpler, less faithful.
+- **C — leave guarded (current).** Additive is skipped whenever upscaling is on. Honest and crash-free,
+  but the feature silently disappears under FSR/bilinear/MetalFX. Fine as an interim.
 
 ## Reproduce Spike 1 (mechanism proof)
 
@@ -271,6 +305,13 @@ Build: `scons platform=linuxbsd target=editor dev_build=yes -jN` (~3 min on this
   `render_forward_clustered.cpp::_fill_render_list`. Diagnosed with a numeric pixel probe
   (frame-2 vs frame-40 differential) in the `/tmp/spike-additive/proj` harness — no RenderDoc needed;
   the "moving quad doesn't smear" clue pointed straight at a growing draw *count*, not RT feedback.
+- **2026-07-21** — Multiview + upscaling triage. Relaxed the pass guard from `view_count == 1` to
+  `internal_size == target_size`, enabling multiview (the code was already `is_multiview`-aware; XR
+  unverified). Established that upscaling is architecturally incompatible post-tonemap (display color @
+  target_size vs depth @ internal_size) and documented three options (A: draw into the tonemap
+  intermediate pre-upscale — recommended; B: depth resolve; C: keep guarded). Verified graceful
+  degradation under `scaling_3d_scale < 1` (pass skips, no validation errors). File:
+  `render_forward_clustered.cpp`.
 - **2026-07-21** — Color-space fidelity: sRGB-encode the display-additive output. Added a
   `display_additive` specialization constant (packed_1 bit 6) + a `linear_to_srgb` helper in
   `scene_forward_clustered_inc.glsl`; the scene fragment shader wraps `frag_color.rgb` when the bit
