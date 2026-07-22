@@ -146,6 +146,20 @@ bool sc_cluster_has_area_light() {
 	return ((sc_packed_1() >> 5) & 1U) != 0;
 }
 
+// SPIKE 3: set for the post-tonemap display-space additive pass, which draws into
+// the display-encoded (sRGB-in-UNORM) render target. When set, the fragment shader
+// sRGB-encodes its linear output so the hardware additive blend adds gamma values.
+bool sc_display_additive() {
+	return ((sc_packed_1() >> 6) & 1U) != 0;
+}
+
+vec3 linear_to_srgb(vec3 color) {
+	// Standard IEC 61966-2-1 sRGB encode. Clamp first: the display target holds 0..1.
+	color = clamp(color, vec3(0.0), vec3(1.0));
+	const vec3 a = vec3(0.055);
+	return mix((vec3(1.0) + a) * pow(color, vec3(1.0 / 2.4)) - a, 12.92 * color, lessThan(color, vec3(0.0031308)));
+}
+
 float sc_luminance_multiplier() {
 	// Not used in clustered renderer but we share some code with the mobile renderer that requires this.
 	return 1.0;

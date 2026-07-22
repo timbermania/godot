@@ -2586,7 +2586,11 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 				RD::get_singleton()->draw_command_begin_label("Display-space additive pass");
 				RID additive_fb = FramebufferCacheRD::get_singleton()->get_cache_multiview(rb->get_view_count(), color_texture, depth_texture);
 				uint32_t display_color_pass_flags = (color_pass_flags | uint32_t(COLOR_PASS_FLAG_TRANSPARENT)) & ~uint32_t(COLOR_PASS_FLAG_SEPARATE_SPECULAR) & ~uint32_t(COLOR_PASS_FLAG_MOTION_VECTORS);
-				RenderListParameters render_list_params(render_list[RENDER_LIST_DISPLAY_ADDITIVE].elements.ptr(), render_list[RENDER_LIST_DISPLAY_ADDITIVE].element_info.ptr(), render_list[RENDER_LIST_DISPLAY_ADDITIVE].elements.size(), reverse_cull, PASS_MODE_COLOR, display_color_pass_flags, rb_data.is_null(), p_render_data->directional_light_soft_shadows, display_additive_rp_uniform_set, get_debug_draw_mode() == RSE::VIEWPORT_DEBUG_DRAW_WIREFRAME, Vector2(), p_render_data->scene_data->lod_distance_multiplier, p_render_data->scene_data->screen_mesh_lod_threshold, p_render_data->scene_data->view_count, 0, base_specialization);
+				// SPIKE 3: flag the variant so the scene shader sRGB-encodes its output for a
+				// faithful gamma-space add into the display-encoded target.
+				SceneShaderForwardClustered::ShaderSpecialization display_specialization = base_specialization;
+				display_specialization.display_additive = 1;
+				RenderListParameters render_list_params(render_list[RENDER_LIST_DISPLAY_ADDITIVE].elements.ptr(), render_list[RENDER_LIST_DISPLAY_ADDITIVE].element_info.ptr(), render_list[RENDER_LIST_DISPLAY_ADDITIVE].elements.size(), reverse_cull, PASS_MODE_COLOR, display_color_pass_flags, rb_data.is_null(), p_render_data->directional_light_soft_shadows, display_additive_rp_uniform_set, get_debug_draw_mode() == RSE::VIEWPORT_DEBUG_DRAW_WIREFRAME, Vector2(), p_render_data->scene_data->lod_distance_multiplier, p_render_data->scene_data->screen_mesh_lod_threshold, p_render_data->scene_data->view_count, 0, display_specialization);
 				_render_list_with_draw_list(&render_list_params, additive_fb, RD::DRAW_DEFAULT_ALL, Vector<Color>(), 0.0f, 0u, p_render_data->render_region);
 				RD::get_singleton()->draw_command_end_label();
 			}

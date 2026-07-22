@@ -3099,6 +3099,14 @@ void fragment_shader(in SceneData scene_data) {
 	frag_color.rgb *= premul_alpha;
 #endif //PREMUL_ALPHA_USED
 
+	// SPIKE 3 (display-space additive): this pass draws post-tonemap into the
+	// display-encoded (sRGB-in-UNORM) render target. Encode the linear shader output
+	// to sRGB so the hardware additive blend adds gamma-space values and clamps at 1.0
+	// (a faithful PSX-style add). All other passes leave frag_color linear.
+	if (sc_display_additive()) {
+		frag_color.rgb = linear_to_srgb(frag_color.rgb);
+	}
+
 #endif //MODE_SEPARATE_SPECULAR
 
 #endif //MODE_RENDER_DEPTH

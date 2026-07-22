@@ -1,6 +1,6 @@
 # Forward+ display-space (gamma-space) additive blending
 
-**Status:** 🟢 Spike 3 complete + accumulation blocker fixed — material-facing `render_mode display_additive` works end-to-end (routing + post-tonemap draw + gamma add + occlusion, no crashes, stable on static scenes). Remaining: color-space encode, multiview/scaling, blend_sub + mobile, upstream proposal.
+**Status:** 🟢 Spike 3 complete + accumulation fixed + sRGB-encode fidelity done — material-facing `render_mode display_additive` works end-to-end (routing + post-tonemap draw + faithful gamma-space add + occlusion, no crashes, stable on static scenes). Remaining: multiview/scaling/MSAA, blend_sub + mobile, upstream proposal.
 **Branch:** `spike/forward-plus-display-space-additive`
 **Owner:** Aaron Curry
 **Last updated:** 2026-07-21
@@ -201,10 +201,12 @@ both frame 2 and frame 40 (previously frame 40 was `[1.000, 1.000, 1.000]`).
 - [x] ~~**Fix temporal accumulation (blocker).**~~ Done — `RENDER_LIST_DISPLAY_ADDITIVE` was
       never cleared per frame (opaque-fill reset block skipped it); one-line fix clears it beside
       `_MOTION` / `_ALPHA`. Static scenes now stable (frame 2 == frame 40 numerically).
-- [ ] **Color-space fidelity.** The material currently emits *linear* albedo into the gamma
-      buffer (visually close, clamps fine, but not exact PSX gamma add). For faithful gamma-space
-      add, sRGB-encode the material output — a specialization/`#define` in the scene shader that
-      wraps `frag_color.rgb` in `linear_to_srgb` for the display-additive variant.
+- [x] ~~**Color-space fidelity.**~~ Done — added a `display_additive` **specialization constant**
+      (packed_1 bit 6) that wraps `frag_color.rgb` in `linear_to_srgb` in the scene fragment shader,
+      set only for the display-additive draw. The HW blend now adds true sRGB/gamma values and clamps
+      at 1.0. Verified numerically: green ramp `{0.1,0.3,0.6}` moved from raw `[0.169,0.369,0.671]`
+      (linear emit) to `[0.420,0.655,0.867]` — exactly `bg(0.069) + linear_to_srgb{0.349,0.584,0.795}`.
+      Uses a spec constant (not a new `COLOR_PASS_FLAG`), so it costs one variant, not a variant matrix.
 - [ ] **Multiview / upscaling / MSAA.** Still guarded out (single view, internal==target size).
       Handle XR (per-view) and the scaling/SMAA path (tonemap → intermediate).
 - [ ] **`blend_sub` display variant + mobile.** `blend_sub` should work by the same routing;
@@ -269,3 +271,9 @@ Build: `scons platform=linuxbsd target=editor dev_build=yes -jN` (~3 min on this
   `render_forward_clustered.cpp::_fill_render_list`. Diagnosed with a numeric pixel probe
   (frame-2 vs frame-40 differential) in the `/tmp/spike-additive/proj` harness — no RenderDoc needed;
   the "moving quad doesn't smear" clue pointed straight at a growing draw *count*, not RT feedback.
+- **2026-07-21** — Color-space fidelity: sRGB-encode the display-additive output. Added a
+  `display_additive` specialization constant (packed_1 bit 6) + a `linear_to_srgb` helper in
+  `scene_forward_clustered_inc.glsl`; the scene fragment shader wraps `frag_color.rgb` when the bit
+  is set, and `render_forward_clustered.cpp` sets it only for the display-additive draw. HW blend now
+  adds true gamma values and clamps at 1.0. Files: `scene_shader_forward_clustered.h`,
+  `scene_forward_clustered_inc.glsl`, `scene_forward_clustered.glsl`, `render_forward_clustered.cpp`.
