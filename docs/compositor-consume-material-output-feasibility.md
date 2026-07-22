@@ -310,9 +310,44 @@ and "depth-ordered add↔sub" are confirmed *together*. All three §5 hard const
 hardware. Known limits behaved as documented (§8): sub-from-black clamps to 0 (`order_b` back step);
 linear-space clamp; Forward+ only.
 
+### Spike 2 — ordered-array submission: fold in caller order, not depth (2026-07-22) 🟢 PASS
+
+**Goal:** prove the refined submission model (design work-item #2) — the engine folds flagged prims in
+the **caller's** supplied order, never by camera depth — with the smallest possible diff.
+
+**What changed (Forward+):** deleted the fold list's `sort_by_reverse_depth_and_priority()` and replaced
+it with a new **priority-only** `sort_by_priority()` (a 6-line `SortByPriority` comparator + one changed
+call site in `_render_scene`). The caller conveys fold order via the material's **existing
+`render_priority`** field (`sort.priority`, already populated at `render_forward_clustered.cpp:4324` and
+already read by the alpha sort). No new API, no new instance data — **net touch-point delta is negative**
+vs. Spike 1, and it mirrors on mobile as a one-line sort swap. Occlusion is untouched (it's the separate
+depth-attachment test, not the sort). Within-run order rides MultiMesh instance-buffer position (a
+MultiMesh is one render-list element drawn with N hardware instances); cross-run order is the unique
+per-run `render_priority`, so sort stability is moot.
+
+**On-GPU numeric probe** (same method/harness as Spike 1, RTX 5090, Forward+):
+
+| Scene | Setup | Predicted (R) | Observed (R) | ✓ |
+|---|---|---|---|---|
+| `prio_add_last` | sub(0.3) p1 + add(0.6) p2, **same depth** | 0.60 | **0.6002** | add folds last by priority (from-black sub clamps to 0) |
+| `prio_sub_last` | add(0.6) p1 + sub(0.3) p2, **same depth** | 0.30 | **0.3001** | *same two quads*, swapped priority → 0.6 then −0.3 |
+| `prio_beats_depth` | add(0.6) p1 **front** + sub(0.3) p2 **back** | 0.30 | **0.3001** | priority order **overrides** depth order |
+
+**Decisive results:** (1) `prio_add_last` (0.60) ≠ `prio_sub_last` (0.30) with the *same two quads at the
+same depth* — depth cannot distinguish them, so only caller priority explains the 2× swing. (2)
+`prio_beats_depth` = 0.30, not the 0.60 a back-to-front depth sort would produce (sub-back→clamp 0, then
+add-front→0.6) — the engine drew add-first/sub-last per priority, **ignoring depth entirely.** Frame 2 ==
+frame 40 (temporal stable); no validation errors. The ordered-array submission model holds on hardware
+with a smaller diff than the scene-tree-routing spike.
+
 ---
 
 ## Change log
+- **2026-07-22** — Spike 2 **verified on-GPU** (Forward+): ordered-array submission — the fold list now
+  sorts by caller `render_priority` only (`sort_by_priority()` replaces `sort_by_reverse_depth_and_priority()`),
+  so the engine folds in the game's submitted order, not camera depth. Probe across 3 scenes proved
+  priority controls the fold and overrides depth (`prio_beats_depth` = 0.30 ≠ depth-sort's 0.60). Net
+  touch-point delta negative; no new API. Mobile port priced as a near-clean mirror (design §6).
 - **2026-07-22** — Spike 1 **verified on-GPU** (RTX 5090, Forward+). Numeric center-pixel readback of
   the `("compositor_fold","color")` scratch across 8 scenes: depth occlusion, per-step UNORM clamp
   (saturates at 1.0), depth-ordered add↔sub (order_a 0.30 ≠ order_b 0.60 — the per-step-clamp

@@ -1925,7 +1925,7 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 	render_list[RENDER_LIST_OPAQUE].sort_by_key();
 	render_list[RENDER_LIST_MOTION].sort_by_key();
 	render_list[RENDER_LIST_ALPHA].sort_by_reverse_depth_and_priority();
-	render_list[RENDER_LIST_COMPOSITOR_FOLD].sort_by_reverse_depth_and_priority(); // back-to-front so per-step add/sub clamping in the UNORM scratch matches depth order
+	render_list[RENDER_LIST_COMPOSITOR_FOLD].sort_by_priority(); // fold in the CALLER's order (render_priority = OTDepthPrimOrder run index), NOT camera depth; the engine never sorts by depth for the fold
 
 	int *render_info = p_render_data->render_info ? p_render_data->render_info->info[RSE::VIEWPORT_RENDER_INFO_TYPE_VISIBLE] : (int *)nullptr;
 	_fill_instance_data(RENDER_LIST_OPAQUE, render_info);
