@@ -1,6 +1,6 @@
 # Forward+ display-space (gamma-space) additive blending
 
-**Status:** 🟢 Spike 2 complete — gamma-space add + clamp + depth occlusion proven end-to-end in Forward+; ready to design the material-facing API (shape #1)
+**Status:** 🟢 Spike 3 complete — material-facing `render_mode display_additive` works end-to-end (routing + post-tonemap draw + gamma add + occlusion, no crashes). One known bug: static-scene temporal accumulation. Remaining: fix accumulation, color-space encode, multiview/scaling.
 **Branch:** `spike/forward-plus-display-space-additive`
 **Owner:** Aaron Curry
 **Last updated:** 2026-07-21
@@ -143,28 +143,68 @@ Forward+. This is shape #1's engine mechanism, minus the material API.
 no material routing, no multiview/upscaling support, and it always runs. Next step is the
 material-facing API.
 
+### Spike 3 — material-facing `render_mode display_additive` (2026-07-21) 🟢 works, 1 known bug
+
+**Goal:** expose the proven mechanism to real materials. Add a spatial-shader render_mode,
+route flagged instances into a new render list, and draw that list through the *actual
+forward material pipeline* post-tonemap.
+
+**What was wired (7 sites, all in-tree — no new files):**
+- `shader_types.cpp` — register `display_additive` as a valid spatial render_mode.
+- `scene_shader_forward_clustered.{h,cpp}` — new `bool display_additive` on ShaderData, set
+  from `actions.render_mode_flags["display_additive"]`.
+- `render_forward_clustered.h` — new `RENDER_LIST_DISPLAY_ADDITIVE` list (+ instance buffer).
+- `render_forward_clustered.cpp` `_fill_render_list` — instances whose shader has
+  `display_additive` go to the new list instead of `RENDER_LIST_ALPHA`; plus sort +
+  `_fill_instance_data` for it.
+- `render_forward_clustered.cpp` `_render_scene` — build the list's render-pass uniform set
+  while buffers are valid (bindings reference pooled, frame-lived textures, so it survives
+  tonemap), then after `_render_buffers_post_process_and_tonemap` draw the list into
+  `[RT UNORM color + scene depth]` via the normal `_render_list_with_draw_list`.
+
+The scene shader's own corrected-projection UBO handles Y-flip + reverse-Z, so no manual MVP
+correction is needed (unlike the Spike 2 dedicated shader). The Spike 2 `DisplaySpaceAdditive`
+effect is left in place but is no longer called.
+
+**Result (real `ShaderMaterial`, `render_mode display_additive, blend_add, unshaded`):**
+
+| Overlap + occlusion (frame 2) | Magnitude ramp 0.1 / 0.3 / 0.6 (frame 2) |
+|---|---|
+| ![overlap](assets/additive-spike3-material-overlap-occlusion.png) | ![ramp](assets/additive-spike3-magnitude-ramp.png) |
+| Red wing / magenta overlap / blue wing → additive works via real materials; cyan quad occluded by the wall | Monotonic additive brightness → per-frame magnitude is value-correct |
+
+**Proven:** routing + post-tonemap draw through the real material pipeline works with **no RD
+validation errors / crashes**; additive is gamma-space, depth occlusion is correct, and
+per-frame output is value-correct.
+
+**⚠️ Known bug — static-scene temporal accumulation.** On a perfectly static scene the additive
+contribution stacks across frames (green 0.1 / 0.3 / 0.6 all saturate identically by frame 12),
+i.e. value-independent runaway. A *moving* quad does **not** smear and dynamic scenes look fine,
+so it's a render-target refresh/lifecycle interaction: on static frames the RT isn't being
+re-established from tonemap before the pass adds again. Root cause needs a RenderDoc capture;
+must be fixed before this is usable.
+
 ---
 
-## Recommended next step — material-facing API (shape #1 productization)
+## Recommended next step — finish shape #1
 
-The rendering mechanism is proven (Spike 2). What remains is exposing it to materials:
-
-- [x] ~~Pipeline format key~~ — dedicated shader sidesteps it; `PipelineCacheRD` keys on the
-      display+depth framebuffer format automatically. (Material path still needs scene-shader
-      variants for the display framebuffer — see below.)
-- [x] ~~Depth attachment post-tonemap~~ — `[RT color + get_depth_texture()]` framebuffer +
-      `set_depth_correction` MVP. Occlusion confirmed.
-- [x] ~~sRGB vs UNORM target~~ — target is plain `R8G8B8A8_UNORM`; shader emits gamma color
-      directly. `_SRGB` would (wrongly) blend in linear.
-- [ ] **Material seam.** New `render_mode` (e.g. `blend_add_display` / `blend_sub_display`) →
-      new `BlendMode` enum value → split those instances out of `RENDER_LIST_ALPHA` into a new
-      display-space render list (`render_forward_clustered` list fill, ~line 1151).
-- [ ] **Scene-shader variants for the display framebuffer.** Real materials (not a fixed
-      shader) need their pipelines compiled against the `[UNORM color + depth]` format — a new
-      `COLOR_PASS_FLAG_*`-style variant in `scene_shader_forward_clustered`. This is the one
-      piece Spike 2 deliberately sidestepped with a dedicated shader.
-- [ ] **Multiview / upscaling / MSAA.** Spike 2 guards these out. Productization must handle
-      XR (per-view MVP) and the scaling/SMAA path where tonemap writes to an intermediate.
+- [x] ~~Material seam / render_mode / new render list~~ — done in Spike 3 (`display_additive`).
+- [x] ~~Scene-shader variants for the display framebuffer~~ — non-issue: `_render_list_with_draw_list`
+      into the `[UNORM + depth]` framebuffer compiles the needed pipeline variant lazily; no new
+      `COLOR_PASS_FLAG_*` required.
+- [x] ~~Depth attachment / occlusion~~ — works via `[RT color + get_depth_texture()]`.
+- [ ] **Fix temporal accumulation (blocker).** Ensure the pass composites onto a freshly
+      tonemapped RT each frame. RenderDoc a static frame; check whether tonemap actually
+      overwrites `rt->color` and whether the pass runs once per tonemap output.
+- [ ] **Color-space fidelity.** The material currently emits *linear* albedo into the gamma
+      buffer (visually close, clamps fine, but not exact PSX gamma add). For faithful gamma-space
+      add, sRGB-encode the material output — a specialization/`#define` in the scene shader that
+      wraps `frag_color.rgb` in `linear_to_srgb` for the display-additive variant.
+- [ ] **Multiview / upscaling / MSAA.** Still guarded out (single view, internal==target size).
+      Handle XR (per-view) and the scaling/SMAA path (tonemap → intermediate).
+- [ ] **`blend_sub` display variant + mobile.** `blend_sub` should work by the same routing;
+      the mobile renderer needs the render_mode registered (or explicitly rejected) so mobile
+      shader compiles don't choke on `display_additive`.
 - [ ] **Upstream framing.** No godot-proposal frames this as blend *space*. Consider filing
       one to fill that gap (distinct from #7058 / #102366 which are blend *mode*).
 
@@ -213,3 +253,8 @@ Build: `scons platform=linuxbsd target=editor dev_build=yes -jN` (~3 min on this
   remaining work is the material-facing API. Files: `shaders/effects/display_space_additive.glsl`,
   `effects/display_space_additive.{h,cpp}`, wired in `render_forward_clustered.cpp` +
   `renderer_scene_render_rd.{h,cpp}`.
+- **2026-07-21** — Spike 3: material-facing `render_mode display_additive`. Real materials route
+  into a new `RENDER_LIST_DISPLAY_ADDITIVE` drawn post-tonemap through the actual forward
+  pipeline; gamma add + occlusion work, no crashes. Known bug: static-scene temporal
+  accumulation (dynamic scenes fine). Files: `shader_types.cpp`,
+  `scene_shader_forward_clustered.{h,cpp}`, `render_forward_clustered.{h,cpp}`.

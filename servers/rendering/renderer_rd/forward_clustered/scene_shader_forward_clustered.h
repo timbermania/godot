@@ -253,6 +253,7 @@ public:
 		bool uses_normal_map = false;
 		bool uses_bent_normal_map = false;
 		bool wireframe = false;
+		bool display_additive = false; // SPIKE 3: route to the post-tonemap display-space additive pass
 
 		bool unshaded = false;
 		bool uses_vertex = false;

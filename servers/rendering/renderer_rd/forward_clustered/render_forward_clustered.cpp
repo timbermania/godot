@@ -1148,7 +1148,14 @@ void RenderForwardClustered::_fill_render_list(RenderListType p_render_list, con
 
 				if (force_alpha || (surf->flags & GeometryInstanceSurfaceDataCache::FLAG_PASS_ALPHA)) {
 					surf->color_pass_inclusion_mask = COLOR_PASS_FLAG_TRANSPARENT;
-					render_list[RENDER_LIST_ALPHA].add_element(surf);
+					// SPIKE 3: display-space additive materials are pulled out of the normal
+					// (pre-tonemap, linear) alpha pass and into a separate list drawn after
+					// tonemap into the display-encoded target.
+					if (surf->shader != nullptr && surf->shader->display_additive) {
+						render_list[RENDER_LIST_DISPLAY_ADDITIVE].add_element(surf);
+					} else {
+						render_list[RENDER_LIST_ALPHA].add_element(surf);
+					}
 					if (uses_gi) {
 						surf->sort.uses_forward_gi = 1;
 					}
@@ -1916,11 +1923,13 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 	render_list[RENDER_LIST_OPAQUE].sort_by_key();
 	render_list[RENDER_LIST_MOTION].sort_by_key();
 	render_list[RENDER_LIST_ALPHA].sort_by_reverse_depth_and_priority();
+	render_list[RENDER_LIST_DISPLAY_ADDITIVE].sort_by_reverse_depth_and_priority(); // SPIKE 3 (order-independent, but harmless)
 
 	int *render_info = p_render_data->render_info ? p_render_data->render_info->info[RSE::VIEWPORT_RENDER_INFO_TYPE_VISIBLE] : (int *)nullptr;
 	_fill_instance_data(RENDER_LIST_OPAQUE, render_info);
 	_fill_instance_data(RENDER_LIST_MOTION, render_info);
 	_fill_instance_data(RENDER_LIST_ALPHA, render_info);
+	_fill_instance_data(RENDER_LIST_DISPLAY_ADDITIVE, render_info); // SPIKE 3
 
 	RD::get_singleton()->draw_command_end_label();
 
@@ -2417,6 +2426,15 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 
 	rp_uniform_set = _setup_render_pass_uniform_set(RENDER_LIST_ALPHA, p_render_data, is_multiview, radiance_texture, samplers, transparent_pass_uniform_buffer_index, true);
 
+	// SPIKE 3: set up the render-pass uniform set for the display-space additive list
+	// now, while all render buffers are still valid. It is consumed after tonemap. The
+	// bound textures are pooled for the whole frame, so the set stays valid across the
+	// post-process/tonemap step.
+	RID display_additive_rp_uniform_set;
+	if (rb_data.is_valid() && render_list[RENDER_LIST_DISPLAY_ADDITIVE].elements.size() > 0) {
+		display_additive_rp_uniform_set = _setup_render_pass_uniform_set(RENDER_LIST_DISPLAY_ADDITIVE, p_render_data, is_multiview, radiance_texture, samplers, transparent_pass_uniform_buffer_index, true);
+	}
+
 	{
 		uint32_t transparent_color_pass_flags = (color_pass_flags | uint32_t(COLOR_PASS_FLAG_TRANSPARENT)) & ~uint32_t(COLOR_PASS_FLAG_SEPARATE_SPECULAR);
 		// Motion vectors should not be overwritten by transparent objects.
@@ -2550,21 +2568,26 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 
 		_render_buffers_post_process_and_tonemap(p_render_data);
 
-		// SPIKE 2 (display-space additive): draw test quads into the post-tonemap
-		// UNORM render target with hardware additive blend + depth-test against the
-		// scene depth. Because the target already holds sRGB-encoded scene color and
-		// is a plain UNORM buffer, the add happens in gamma space and clamps at 1.0.
-		// Guarded to the simple case (no upscaling, single view) to keep the color
-		// target and scene depth the same size / layer count. Throwaway; see
-		// docs/display-space-additive-blending.md.
-		if (display_space_additive != nullptr && rb->get_view_count() == 1 && rb->get_internal_size() == rb->get_target_size()) {
+		// SPIKE 3 (display-space additive): draw materials flagged `render_mode
+		// display_additive` into the post-tonemap render target. That target is a plain
+		// R8G8B8A8_UNORM buffer already holding sRGB-encoded scene color, so hardware
+		// additive blend adds in gamma space and clamps at 1.0. Depth-tests against the
+		// scene depth for correct occlusion. The scene shader's own (corrected) projection
+		// UBO handles Y-flip + reverse-Z, so no manual correction is needed here.
+		// Guarded to the simple case (single view, no upscaling) so the color target and
+		// scene depth share size / layer count.
+		if (display_additive_rp_uniform_set.is_valid() && rb->get_view_count() == 1 && rb->get_internal_size() == rb->get_target_size() && render_list[RENDER_LIST_DISPLAY_ADDITIVE].elements.size() > 0) {
 			RendererRD::TextureStorage *texture_storage = RendererRD::TextureStorage::get_singleton();
 			RID color_texture = texture_storage->render_target_get_rd_texture(rb->get_render_target());
 			RID depth_texture = rb->get_depth_texture();
 			if (color_texture.is_valid() && depth_texture.is_valid()) {
-				RENDER_TIMESTAMP("Display-space additive (SPIKE)");
+				RENDER_TIMESTAMP("Display-space additive");
+				RD::get_singleton()->draw_command_begin_label("Display-space additive pass");
 				RID additive_fb = FramebufferCacheRD::get_singleton()->get_cache_multiview(rb->get_view_count(), color_texture, depth_texture);
-				display_space_additive->draw(additive_fb, p_render_data->scene_data->cam_projection, p_render_data->scene_data->cam_transform);
+				uint32_t display_color_pass_flags = (color_pass_flags | uint32_t(COLOR_PASS_FLAG_TRANSPARENT)) & ~uint32_t(COLOR_PASS_FLAG_SEPARATE_SPECULAR) & ~uint32_t(COLOR_PASS_FLAG_MOTION_VECTORS);
+				RenderListParameters render_list_params(render_list[RENDER_LIST_DISPLAY_ADDITIVE].elements.ptr(), render_list[RENDER_LIST_DISPLAY_ADDITIVE].element_info.ptr(), render_list[RENDER_LIST_DISPLAY_ADDITIVE].elements.size(), reverse_cull, PASS_MODE_COLOR, display_color_pass_flags, rb_data.is_null(), p_render_data->directional_light_soft_shadows, display_additive_rp_uniform_set, get_debug_draw_mode() == RSE::VIEWPORT_DEBUG_DRAW_WIREFRAME, Vector2(), p_render_data->scene_data->lod_distance_multiplier, p_render_data->scene_data->screen_mesh_lod_threshold, p_render_data->scene_data->view_count, 0, base_specialization);
+				_render_list_with_draw_list(&render_list_params, additive_fb, RD::DRAW_DEFAULT_ALL, Vector<Color>(), 0.0f, 0u, p_render_data->render_region);
+				RD::get_singleton()->draw_command_end_label();
 			}
 		}
 	}
