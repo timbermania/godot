@@ -946,6 +946,7 @@ void RenderForwardClustered::_fill_render_list(RenderListType p_render_list, con
 			// Opaque fills motion and alpha lists.
 			render_list[RENDER_LIST_MOTION].clear();
 			render_list[RENDER_LIST_ALPHA].clear();
+			render_list[RENDER_LIST_COMPOSITOR_FOLD].clear(); // filled in the same loop as ALPHA; must be cleared here too or it accumulates every frame
 		}
 	}
 
@@ -1148,7 +1149,15 @@ void RenderForwardClustered::_fill_render_list(RenderListType p_render_list, con
 
 				if (force_alpha || (surf->flags & GeometryInstanceSurfaceDataCache::FLAG_PASS_ALPHA)) {
 					surf->color_pass_inclusion_mask = COLOR_PASS_FLAG_TRANSPARENT;
-					render_list[RENDER_LIST_ALPHA].add_element(surf);
+					// Materials flagged `render_mode compositor_fold` are pulled out of the normal
+					// (pre-tonemap, linear, on-screen) alpha pass and instead drawn into an isolated
+					// scratch buffer that a CompositorEffect consumes. They still shade through their
+					// real material pipeline; the engine just retargets where the fold lands.
+					if (surf->shader != nullptr && surf->shader->compositor_fold) {
+						render_list[RENDER_LIST_COMPOSITOR_FOLD].add_element(surf);
+					} else {
+						render_list[RENDER_LIST_ALPHA].add_element(surf);
+					}
 					if (uses_gi) {
 						surf->sort.uses_forward_gi = 1;
 					}
@@ -1916,11 +1925,13 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 	render_list[RENDER_LIST_OPAQUE].sort_by_key();
 	render_list[RENDER_LIST_MOTION].sort_by_key();
 	render_list[RENDER_LIST_ALPHA].sort_by_reverse_depth_and_priority();
+	render_list[RENDER_LIST_COMPOSITOR_FOLD].sort_by_reverse_depth_and_priority(); // back-to-front so per-step add/sub clamping in the UNORM scratch matches depth order
 
 	int *render_info = p_render_data->render_info ? p_render_data->render_info->info[RSE::VIEWPORT_RENDER_INFO_TYPE_VISIBLE] : (int *)nullptr;
 	_fill_instance_data(RENDER_LIST_OPAQUE, render_info);
 	_fill_instance_data(RENDER_LIST_MOTION, render_info);
 	_fill_instance_data(RENDER_LIST_ALPHA, render_info);
+	_fill_instance_data(RENDER_LIST_COMPOSITOR_FOLD, render_info);
 
 	RD::get_singleton()->draw_command_end_label();
 
@@ -2417,6 +2428,14 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 
 	rp_uniform_set = _setup_render_pass_uniform_set(RENDER_LIST_ALPHA, p_render_data, is_multiview, radiance_texture, samplers, transparent_pass_uniform_buffer_index, true);
 
+	// Set up the render-pass uniform set for the compositor-fold list now, while all render
+	// buffers are still valid. The fold list is drawn after the transparent resolve (below);
+	// its bound textures are pooled for the whole frame so the set stays valid until then.
+	RID compositor_fold_rp_uniform_set;
+	if (rb_data.is_valid() && render_list[RENDER_LIST_COMPOSITOR_FOLD].elements.size() > 0) {
+		compositor_fold_rp_uniform_set = _setup_render_pass_uniform_set(RENDER_LIST_COMPOSITOR_FOLD, p_render_data, is_multiview, radiance_texture, samplers, transparent_pass_uniform_buffer_index, true);
+	}
+
 	{
 		uint32_t transparent_color_pass_flags = (color_pass_flags | uint32_t(COLOR_PASS_FLAG_TRANSPARENT)) & ~uint32_t(COLOR_PASS_FLAG_SEPARATE_SPECULAR);
 		// Motion vectors should not be overwritten by transparent objects.
@@ -2453,6 +2472,38 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 		_copy_framebuffer_to_ss_effects(rb, using_ssil, using_ssr);
 	}
 	RD::get_singleton()->draw_command_end_label();
+
+	// Compositor fold: draw materials flagged `render_mode compositor_fold` through their real
+	// forward material pipeline into an isolated scratch buffer, so a CompositorEffect can read
+	// the self-shaded, depth-ordered, clamped result in POST_TRANSPARENT and fold it itself
+	// (instead of re-implementing each material's fragment shader in raw GLSL).
+	//
+	// Drawn here — after the transparent resolve, before the POST_TRANSPARENT callback — so the
+	// scratch is ready when the effect runs. The target is a clamping A2B10G10R10_UNORM buffer:
+	// per-material hardware add/sub blend saturates per draw, which is the per-step fold clamp.
+	// Depth-tests against the (resolved) scene depth for correct occlusion; depth is loaded, not
+	// cleared. Both scratch and depth are internal-size + single-sample, so this is independent of
+	// upscaling/MSAA. The scratch is cleared to black each frame (additive accumulation); seeding
+	// it with scene color for subtractive materials is a follow-up.
+	if (compositor_fold_rp_uniform_set.is_valid() && render_list[RENDER_LIST_COMPOSITOR_FOLD].elements.size() > 0) {
+		RID depth_texture = rb->get_depth_texture();
+		if (depth_texture.is_valid()) {
+			RENDER_TIMESTAMP("Compositor Fold");
+			RD::get_singleton()->draw_command_begin_label("Compositor Fold pass");
+
+			// Isolated scratch a CompositorEffect reads via get_texture("compositor_fold", "color").
+			RID fold_texture = rb->create_texture(SNAME("compositor_fold"), SNAME("color"), RD::DATA_FORMAT_A2B10G10R10_UNORM_PACK32, RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT | RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_STORAGE_BIT | RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT, RD::TEXTURE_SAMPLES_1, rb->get_internal_size(), rb->get_view_count());
+
+			RID fold_framebuffer = FramebufferCacheRD::get_singleton()->get_cache_multiview(rb->get_view_count(), fold_texture, depth_texture);
+
+			uint32_t fold_color_pass_flags = (color_pass_flags | uint32_t(COLOR_PASS_FLAG_TRANSPARENT)) & ~uint32_t(COLOR_PASS_FLAG_SEPARATE_SPECULAR) & ~uint32_t(COLOR_PASS_FLAG_MOTION_VECTORS);
+			RenderListParameters render_list_params(render_list[RENDER_LIST_COMPOSITOR_FOLD].elements.ptr(), render_list[RENDER_LIST_COMPOSITOR_FOLD].element_info.ptr(), render_list[RENDER_LIST_COMPOSITOR_FOLD].elements.size(), reverse_cull, PASS_MODE_COLOR, fold_color_pass_flags, rb_data.is_null(), p_render_data->directional_light_soft_shadows, compositor_fold_rp_uniform_set, get_debug_draw_mode() == RSE::VIEWPORT_DEBUG_DRAW_WIREFRAME, Vector2(), p_render_data->scene_data->lod_distance_multiplier, p_render_data->scene_data->screen_mesh_lod_threshold, p_render_data->scene_data->view_count, 0, base_specialization);
+			// Clear the scratch color to transparent black; load (preserve) the shared scene depth.
+			_render_list_with_draw_list(&render_list_params, fold_framebuffer, RD::DRAW_CLEAR_COLOR_0, { Color(0, 0, 0, 0) }, 0.0f, 0u, p_render_data->render_region);
+
+			RD::get_singleton()->draw_command_end_label();
+		}
+	}
 
 	{
 		RENDER_TIMESTAMP("Process Post Transparent Compositor Effects");

@@ -253,6 +253,7 @@ public:
 		bool uses_normal_map = false;
 		bool uses_bent_normal_map = false;
 		bool wireframe = false;
+		bool compositor_fold = false; // route transparent output into the compositor fold scratch buffer
 
 		bool unshaded = false;
 		bool uses_vertex = false;
