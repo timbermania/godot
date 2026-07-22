@@ -946,6 +946,7 @@ void RenderForwardClustered::_fill_render_list(RenderListType p_render_list, con
 			// Opaque fills motion and alpha lists.
 			render_list[RENDER_LIST_MOTION].clear();
 			render_list[RENDER_LIST_ALPHA].clear();
+			render_list[RENDER_LIST_DISPLAY_ADDITIVE].clear(); // SPIKE 3: opaque fill also routes display-additive surfaces
 		}
 	}
 

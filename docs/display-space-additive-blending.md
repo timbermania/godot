@@ -1,6 +1,6 @@
 # Forward+ display-space (gamma-space) additive blending
 
-**Status:** 🟢 Spike 3 complete — material-facing `render_mode display_additive` works end-to-end (routing + post-tonemap draw + gamma add + occlusion, no crashes). One known bug: static-scene temporal accumulation. Remaining: fix accumulation, color-space encode, multiview/scaling.
+**Status:** 🟢 Spike 3 complete + accumulation blocker fixed — material-facing `render_mode display_additive` works end-to-end (routing + post-tonemap draw + gamma add + occlusion, no crashes, stable on static scenes). Remaining: color-space encode, multiview/scaling, blend_sub + mobile, upstream proposal.
 **Branch:** `spike/forward-plus-display-space-additive`
 **Owner:** Aaron Curry
 **Last updated:** 2026-07-21
@@ -177,12 +177,17 @@ effect is left in place but is no longer called.
 validation errors / crashes**; additive is gamma-space, depth occlusion is correct, and
 per-frame output is value-correct.
 
-**⚠️ Known bug — static-scene temporal accumulation.** On a perfectly static scene the additive
-contribution stacks across frames (green 0.1 / 0.3 / 0.6 all saturate identically by frame 12),
-i.e. value-independent runaway. A *moving* quad does **not** smear and dynamic scenes look fine,
-so it's a render-target refresh/lifecycle interaction: on static frames the RT isn't being
-re-established from tonemap before the pass adds again. Root cause needs a RenderDoc capture;
-must be fixed before this is usable.
+**✅ Fixed — static-scene temporal accumulation (2026-07-21).** Root cause was *not* an RT
+lifecycle issue but an uncleared render list: `_fill_render_list`'s reset block clears
+`RENDER_LIST_OPAQUE` / `_MOTION` / `_ALPHA` at the top of each frame, but `RENDER_LIST_DISPLAY_ADDITIVE`
+— which is populated in the *same* opaque-fill loop (right beside where ALPHA is filled) — was
+never cleared. So the list grew by N elements every frame and the post-tonemap pass re-drew every
+accumulated element additively → linear runaway with frame count → saturation. This exactly
+explains the "moving quad doesn't smear" clue: the tonemap base *is* refreshed each frame; only the
+additive draw *count* grew. Fix: one line in `render_forward_clustered.cpp::_fill_render_list` —
+clear `RENDER_LIST_DISPLAY_ADDITIVE` in the `RENDER_LIST_OPAQUE` branch alongside its sibling lists.
+Verified with a numeric probe: green ramp `[0.1,0.3,0.6]` samples to `[0.169, 0.369, 0.671]` at
+both frame 2 and frame 40 (previously frame 40 was `[1.000, 1.000, 1.000]`).
 
 ---
 
@@ -193,9 +198,9 @@ must be fixed before this is usable.
       into the `[UNORM + depth]` framebuffer compiles the needed pipeline variant lazily; no new
       `COLOR_PASS_FLAG_*` required.
 - [x] ~~Depth attachment / occlusion~~ — works via `[RT color + get_depth_texture()]`.
-- [ ] **Fix temporal accumulation (blocker).** Ensure the pass composites onto a freshly
-      tonemapped RT each frame. RenderDoc a static frame; check whether tonemap actually
-      overwrites `rt->color` and whether the pass runs once per tonemap output.
+- [x] ~~**Fix temporal accumulation (blocker).**~~ Done — `RENDER_LIST_DISPLAY_ADDITIVE` was
+      never cleared per frame (opaque-fill reset block skipped it); one-line fix clears it beside
+      `_MOTION` / `_ALPHA`. Static scenes now stable (frame 2 == frame 40 numerically).
 - [ ] **Color-space fidelity.** The material currently emits *linear* albedo into the gamma
       buffer (visually close, clamps fine, but not exact PSX gamma add). For faithful gamma-space
       add, sRGB-encode the material output — a specialization/`#define` in the scene shader that
@@ -258,3 +263,9 @@ Build: `scons platform=linuxbsd target=editor dev_build=yes -jN` (~3 min on this
   pipeline; gamma add + occlusion work, no crashes. Known bug: static-scene temporal
   accumulation (dynamic scenes fine). Files: `shader_types.cpp`,
   `scene_shader_forward_clustered.{h,cpp}`, `render_forward_clustered.{h,cpp}`.
+- **2026-07-21** — Fixed the Spike 3 accumulation blocker. Root cause: `RENDER_LIST_DISPLAY_ADDITIVE`
+  was populated during the opaque fill but omitted from the per-frame clear block, so it accumulated
+  N elements/frame and the post-tonemap pass re-drew them all → runaway. One-line fix in
+  `render_forward_clustered.cpp::_fill_render_list`. Diagnosed with a numeric pixel probe
+  (frame-2 vs frame-40 differential) in the `/tmp/spike-additive/proj` harness — no RenderDoc needed;
+  the "moving quad doesn't smear" clue pointed straight at a growing draw *count*, not RT feedback.
