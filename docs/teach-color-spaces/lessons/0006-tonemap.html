@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 6 · Tonemap — the last arrow, and why the fold demands Linear</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .ops { width: 100%; border-collapse: collapse; margin: 1.1rem 0; font-size: .86rem; }
+  .ops th, .ops td { border: 1px solid var(--rule); padding: .5rem .6rem; text-align: left; vertical-align: top; }
+  .ops th { background: var(--code-bg); font-weight: 600; }
+  .ops code { font-size: .82em; }
+  .flow { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: .8rem;
+          line-height: 1.7; background: var(--code-bg); border: 1px solid var(--rule);
+          border-radius: .4rem; padding: 1.1rem; overflow-x: auto; }
+  .lin { color: var(--linear); font-weight: 600; }
+  .gam { color: var(--gamma); font-weight: 600; }
+  .done { background: #eef4ee; border: 1px solid #c7ddc7; border-radius: .4rem; padding: 1rem 1.2rem;
+          margin: 1.6rem 0; font-size: .92rem; }
+  .done ul { margin: .4rem 0 0; padding-left: 1.2rem; }
+  .done li { margin: .15rem 0; }
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <p class="eyebrow">Color Spaces &amp; the Fold Pipeline · Lesson 6 · finale</p>
+  <h1>Tonemap</h1>
+  <p class="subtitle">The final linear → screen arrow — and why your compositor pins it to "Linear."</p>
+</header>
+
+<p>One arrow left. The fold is done, decoded back to linear (Pass C), and the frame is sitting in the
+linear scene buffer — <em>still HDR, still linear.</em> The monitor can't show that. Tonemap
+(Pass 5) is the step that makes it displayable. Question 7 — <em>what is a tonemap?</em> — plus the
+one constraint your design stamps on it: <strong>it must be Linear.</strong></p>
+
+<h2>1 · What a tonemap does</h2>
+
+<p>The linear scene is <strong>HDR</strong>: values run <code>[0, ∞)</code> — a sunlit highlight might
+be 8.0, an emissive core 40.0. A monitor accepts only <code>[0, 1]</code>, gamma-encoded. Tonemap
+bridges that gap in two moves:</p>
+
+<p>• <strong>Tone <em>mapping</em> (the operator):</strong> compress the open-ended HDR range down into
+<code>[0, 1]</code> — decide how highlights roll off, how the midtones sit.</p>
+<p>• <strong>Encode to screen:</strong> apply the sRGB curve (linear → gamma) so the monitor shows the
+right brightness (L1). This is the <span class="chip linear">linear</span> → <span class="chip gamma">screen</span>
+arrow from Lesson 5.</p>
+
+<p>"Which operator" is a creative/technical choice, and Godot offers several:</p>
+
+<table class="ops">
+  <tr><th>Operator</th><th>Curve</th><th>Effect</th></tr>
+  <tr><td><strong>Linear</strong></td><td>identity (+ exposure/clamp)</td>
+    <td>No reshaping. Values ≤ 1 pass through untouched; &gt; 1 clip. Then sRGB encode.</td></tr>
+  <tr><td>Reinhard</td><td><code>x/(1+x)</code></td><td>Smoothly compresses highlights; never clips.</td></tr>
+  <tr><td>Filmic / ACES / AgX</td><td>S-curve (toe + shoulder)</td>
+    <td>Film-like: lifts blacks, rolls off <em>and desaturates</em> highlights, shifts contrast/hue.</td></tr>
+</table>
+
+<div class="note">
+  Operator reference: <a href="https://school.gdquest.com/glossary/tonemap"><span class="src">GDQuest —
+  Tonemap</span></a> and <a href="https://docs.godotengine.org/en/stable/tutorials/3d/high_dynamic_range.html">Godot
+  — High Dynamic Range.</a> The operator lives on the <code>Environment</code>, not per-material.
+</div>
+
+<h2>2 · Why the fold <em>demands</em> Linear</h2>
+
+<p>Your compositor's header is blunt about it — <code>CombatDisplaySpaceComposite.gd:36</code>:</p>
+
+<pre><code>## Run under Linear tonemap (ACES/AgX corrupt the add).</code></pre>
+
+<p>Here's why, using everything you now know. By the time tonemap runs, the fold has <strong>already
+produced the exact final PSX colors</strong> — authored 5-bit palette colors, added in gamma, in
+order (Lessons 4–5). They are <em>finished</em>. They just need to reach the glass unchanged.</p>
+
+<div class="key">
+  <span class="label">The corruption</span>
+  An S-curve operator (ACES/AgX) doesn't pass colors through — it <strong>reshapes</strong> them: it
+  lifts blacks, rolls off highlights, and <em>desaturates</em> as things get bright. Run it on the
+  fold and your crisp additive white core comes out dimmer and grayer; your saturated PSX colors shift
+  hue. The carefully-built additive result gets a film look stamped on top of it. That's the "corrupt
+  the add."
+</div>
+
+<p>AgX is the worst offender — it's <em>designed</em> to desaturate highlights hard, which is exactly
+where additive PSX effects live. <strong>Linear</strong> is the only operator that applies no reshape:
+values ≤ 1 pass straight through (then sRGB-encode), so the authored colors land on screen as
+authored.</p>
+
+<h2>3 · The elegant part: why the detour to linear is <em>free</em></h2>
+
+<p>You asked earlier why Pass C bothers decoding back to linear if it's "just going to be gamma again."
+Now it closes. Watch a <strong>folded</strong> pixel through the last two passes:</p>
+
+<div class="flow">
+Pass C:   fold result <span class="gam">display</span>  ──decode──▶  <span class="lin">linear</span>
+Pass 5:   <span class="lin">linear</span>  ──Linear-tonemap encode──▶  <span class="gam">screen</span>
+
+decode (display→linear) then encode (linear→screen) with the SAME curve  =  <b>identity re-encode</b>
+</div>
+
+<p>Because <span class="chip gamma">display</span> and <span class="chip gamma">screen</span> are the
+<em>same</em> space (your Lesson-1 payoff), and Linear tonemap doesn't reshape, the decode in Pass C
+and the encode in Pass 5 are <strong>inverses that cancel</strong>. The folded color you built in the
+scratch reaches the monitor essentially <strong>unchanged</strong>.</p>
+
+<p>So why detour through linear at all? So that folded pixels and the untouched HDR background flow
+through <strong>one shared output path</strong>. The background genuinely needs tonemapping (it's
+linear HDR); the fold pixels ride the same pass and, thanks to Linear, pass through untouched. Swap in
+ACES and you'd wreck <em>both</em> the fold (reshaped) — which is why the constraint exists.</p>
+
+<h2>4 · The complete diagram, every word now yours</h2>
+
+<pre><code>Pass 1     Pass A       Pass B        Pass C          Pass 5
+opaque     seed         fold          out             tonemap (Linear)
+<span class="lin">linear</span> ──▶ <span class="gam">display</span> ──▶ <span class="gam">display</span> ──▶ <span class="lin">linear</span> ──▶ <span class="gam">screen</span>
+ scene    encode+clamp  gamma add    decode+RGB555    identity op + sRGB
+          (L5, seed)    (L4, raw)    (L5, quantize)   (this lesson)
+  ▲          ▲            ▲             ▲                ▲
+ L2/L3      Q5           Q6            Q5               Q7
+depth      why gamma   raw texel     round trip       why Linear
+filter</code></pre>
+
+<div class="done">
+  <strong>You've answered all seven.</strong>
+  <ul>
+    <li>Q1 — linear/gamma; "display" == "screen" == one gamma space (L1)</li>
+    <li>Q2 — the depth buffer (L2) · Q3 — prims depth-test, never write (L2)</li>
+    <li>Q4 — the filter routes by <code>uses_alpha_pass()</code> + <code>compositor_fold</code> (L3)</li>
+    <li>Q6 — raw texel; the color space lives in the data (L4)</li>
+    <li>Q5 — linear→display→linear→screen as a bracketed gamma excursion (L5)</li>
+    <li>Q7 — tonemap, and why the fold pins it to Linear (this lesson)</li>
+  </ul>
+</div>
+
+<h2>Check yourself</h2>
+<p>Commit before reading the feedback.</p>
+
+<div class="quiz" data-answer="0">
+  <p class="q">A tonemap's core job is to map the scene's open-ended HDR range into:</p>
+  <div class="opts">
+    <button class="opt">a displayable range</button>
+    <button class="opt">a linear color space</button>
+    <button class="opt">a depth-sorted order</button>
+  </div>
+  <p class="feedback"
+     data-good="Right — compress HDR [0,∞) into [0,1] the monitor can show, then encode to sRGB."
+     data-bad="It compresses HDR [0,∞) into the displayable [0,1] range, then sRGB-encodes for the monitor."></p>
+</div>
+
+<div class="quiz" data-answer="0">
+  <p class="q">The compositor pins Linear tonemap because an S-curve operator would:</p>
+  <div class="opts">
+    <button class="opt">reshape the fold</button>
+    <button class="opt">linearize the fold</button>
+    <button class="opt">depth-test the fold</button>
+  </div>
+  <p class="feedback"
+     data-good="Yes — ACES/AgX lift blacks and desaturate highlights, stamping a film look on the finished PSX colors."
+     data-bad="An S-curve reshapes (lifts blacks, desaturates highlights) the already-final additive result — 'corrupt the add.'"></p>
+</div>
+
+<div class="quiz" data-answer="0">
+  <p class="q">For a folded pixel, Pass C's decode then Linear tonemap's encode leaves it essentially:</p>
+  <div class="opts">
+    <button class="opt">unchanged</button>
+    <button class="opt">inverted</button>
+    <button class="opt">darkened</button>
+  </div>
+  <p class="feedback"
+     data-good="Right — same-curve decode then encode cancel; the display color you built survives to screen."
+     data-bad="Decode (display→linear) and Linear encode (linear→screen) are inverses that cancel — it survives unchanged."></p>
+</div>
+
+<div class="ask">
+  <strong>Ask me anything.</strong> Good closing pulls: <em>"show me an ACES curve number so I can see
+  the desaturation,"</em> or <em>"if Linear clips values &gt; 1, do any fold pixels ever exceed 1?"</em>
+  (they can't — the scratch was UNORM), or <em>"could a non-PSX HDR game and the PSX fold share a
+  frame?"</em> (that's a real design question — the global tonemap is the tension).
+</div>
+
+<div class="footer">
+  <p><strong>Primary source:</strong> <code>CombatDisplaySpaceComposite.gd:36</code> (the Linear
+  requirement) + <a href="https://school.gdquest.com/glossary/tonemap">GDQuest — Tonemap</a> and
+  <a href="https://docs.godotengine.org/en/stable/tutorials/3d/high_dynamic_range.html">Godot — HDR.</a></p>
+
+  <p><strong>Previous:</strong> <a href="0005-linear-display-linear-screen.html">Lesson 5 — The round trip.</a>
+  &nbsp;·&nbsp; <strong>Where to go now:</strong> the course covered the <em>fundamentals</em>. With
+  them, the open engineering questions in <code>engine-shaded-display-fold.md</code> §7 are now
+  <em>yours to reason about</em> — you already dismantled open-Q1 (raw-value preservation) in Lesson 4.
+  For <em>wisdom</em> (testing your reasoning against practitioners), the resources list points to
+  <a href="../RESOURCES.md">r/GraphicsProgramming</a>.</p>
+
+  <div class="pill-nav">
+    <a href="0005-linear-display-linear-screen.html">← Lesson 5</a>
+    <a href="0001-linear-vs-gamma.html">Lesson 1</a>
+    <a href="../engine-shaded-display-fold.md">The plan</a>
+    <a href="../GLOSSARY.md">Glossary</a>
+    <a href="../RESOURCES.md">Resources</a>
+  </div>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

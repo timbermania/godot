@@ -1,0 +1,122 @@
+/* lesson.css — shared stylesheet for the Color Spaces & Fold Pipeline course.
+   Tufte-inspired: generous margins, sidenotes, restrained palette, prints cleanly. */
+
+:root {
+  --ink:        #1a1a1a;
+  --paper:      #fdfcf9;
+  --muted:      #6b6660;
+  --rule:       #d8d2c8;
+  --accent:     #7a1f1f;   /* deep red — used sparingly for emphasis */
+  --linear:     #1f6f7a;   /* teal  = linear space */
+  --gamma:      #a5591a;   /* amber = gamma/display/screen space */
+  --code-bg:    #f3f0ea;
+  --good:       #2f6b34;
+  --bad:        #8a2b2b;
+  --maxwidth:   46rem;
+}
+
+html { font-size: 17px; }
+body {
+  font-family: et-book, Palatino, "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  color: var(--ink);
+  background: var(--paper);
+  line-height: 1.55;
+  margin: 0 auto;
+  padding: 4rem 2rem 6rem;
+  max-width: var(--maxwidth);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---- Masthead ---- */
+.masthead { border-bottom: 1px solid var(--rule); padding-bottom: 1rem; margin-bottom: 2.5rem; }
+.eyebrow {
+  font-size: .72rem; letter-spacing: .16em; text-transform: uppercase;
+  color: var(--muted); margin: 0 0 .4rem;
+}
+h1 { font-weight: 400; font-size: 2.05rem; line-height: 1.15; margin: 0 0 .3rem; }
+.subtitle { color: var(--muted); font-style: italic; font-size: 1.05rem; margin: 0; }
+
+/* ---- Flow ---- */
+h2 { font-weight: 400; font-size: 1.4rem; margin: 2.6rem 0 .6rem; }
+h3 { font-weight: 600; font-size: 1.02rem; margin: 1.8rem 0 .4rem; letter-spacing: .01em; }
+p  { margin: .7rem 0; }
+strong { font-weight: 650; }
+a { color: var(--accent); text-decoration: none; border-bottom: 1px solid rgba(122,31,31,.28); }
+a:hover { border-bottom-color: var(--accent); }
+
+/* ---- Color-space chips ---- */
+.chip {
+  display: inline-block; padding: .02em .45em; border-radius: .3em;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .82em; font-weight: 600; line-height: 1.4;
+  border: 1px solid currentColor;
+}
+.chip.linear { color: var(--linear); background: rgba(31,111,122,.08); }
+.chip.gamma  { color: var(--gamma);  background: rgba(165,89,26,.09); }
+
+/* ---- Sidenote / margin note ---- */
+.note {
+  font-size: .84rem; color: var(--muted); line-height: 1.4;
+  border-left: 2px solid var(--rule); padding-left: .9rem; margin: 1.1rem 0;
+}
+.note .src { font-style: italic; }
+
+/* ---- Key idea callout ---- */
+.key {
+  background: #fbf6ee; border: 1px solid var(--rule); border-left: 4px solid var(--accent);
+  border-radius: .25rem; padding: 1rem 1.2rem; margin: 1.6rem 0;
+}
+.key .label {
+  font-size: .7rem; letter-spacing: .14em; text-transform: uppercase;
+  color: var(--accent); font-weight: 700; display: block; margin-bottom: .3rem;
+}
+
+/* ---- Code ---- */
+code {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .86em; background: var(--code-bg); padding: .08em .35em; border-radius: .25em;
+}
+pre { background: var(--code-bg); padding: 1rem 1.1rem; border-radius: .4rem; overflow-x: auto;
+      font-size: .82rem; line-height: 1.5; border: 1px solid var(--rule); }
+pre code { background: none; padding: 0; }
+
+/* ---- Figures ---- */
+figure { margin: 1.8rem 0; }
+figcaption { font-size: .82rem; color: var(--muted); font-style: italic; margin-top: .5rem; }
+.bar-demo { display: flex; align-items: stretch; height: 3.2rem; border: 1px solid var(--rule);
+            border-radius: .3rem; overflow: hidden; font-size: .72rem; }
+.bar-demo div { display: flex; align-items: flex-end; justify-content: center; color: #fff;
+                padding-bottom: .2rem; text-shadow: 0 1px 2px rgba(0,0,0,.6); flex: 1; }
+
+/* ---- Quiz widget (see quiz.js) ---- */
+.quiz { border: 1px solid var(--rule); border-radius: .4rem; padding: 1.2rem 1.3rem; margin: 1.4rem 0;
+        background: #fff; }
+.quiz .q { font-weight: 600; margin: 0 0 .8rem; }
+.quiz .opts { display: flex; flex-direction: column; gap: .5rem; }
+.quiz button.opt {
+  font: inherit; text-align: left; padding: .55rem .8rem; border: 1px solid var(--rule);
+  background: var(--paper); border-radius: .3rem; cursor: pointer; transition: background .12s, border-color .12s;
+}
+.quiz button.opt:hover { background: var(--code-bg); }
+.quiz button.opt.correct { border-color: var(--good); background: rgba(47,107,52,.1); }
+.quiz button.opt.wrong   { border-color: var(--bad);  background: rgba(138,43,43,.1); }
+.quiz .feedback { margin-top: .8rem; font-size: .9rem; min-height: 1.2em; }
+.quiz .feedback.good { color: var(--good); }
+.quiz .feedback.bad  { color: var(--bad); }
+
+/* ---- Footer / next steps ---- */
+.footer { margin-top: 3.5rem; padding-top: 1.2rem; border-top: 1px solid var(--rule);
+          font-size: .92rem; color: var(--muted); }
+.ask { background: #eef4f4; border: 1px solid #cfe0e0; border-radius: .4rem; padding: 1rem 1.2rem;
+       margin: 2rem 0; font-size: .95rem; }
+.ask strong { color: var(--linear); }
+.pill-nav { display: flex; gap: .6rem; flex-wrap: wrap; margin-top: 1rem; }
+.pill-nav a { font-size: .82rem; border: 1px solid var(--rule); border-radius: 1rem; padding: .25rem .8rem;
+              color: var(--muted); }
+
+@media print {
+  body { padding: 1rem; max-width: none; font-size: 11pt; }
+  .quiz button.opt { border-color: #999; }
+  .ask { background: none; }
+  a { color: var(--ink); }
+}

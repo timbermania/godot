@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 2 · The depth buffer, and how blend prims get depth-tested</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  /* Lesson-2-local: the two-switch diagram. */
+  .switches { display: flex; gap: 1rem; flex-wrap: wrap; margin: 1.4rem 0; }
+  .switch { flex: 1 1 13rem; border: 1px solid var(--rule); border-radius: .4rem; padding: .9rem 1rem;
+            background: #fff; }
+  .switch h4 { margin: 0 0 .3rem; font-size: .95rem; }
+  .switch .desc { font-size: .86rem; color: var(--muted); margin: .2rem 0 0; }
+  .modes { width: 100%; border-collapse: collapse; margin: 1.2rem 0; font-size: .88rem; }
+  .modes th, .modes td { border: 1px solid var(--rule); padding: .45rem .6rem; text-align: left; vertical-align: top; }
+  .modes th { background: var(--code-bg); font-weight: 600; }
+  .modes code { font-size: .82em; }
+  .yes { color: var(--good); font-weight: 600; }
+  .no  { color: var(--bad);  font-weight: 600; }
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <p class="eyebrow">Color Spaces &amp; the Fold Pipeline · Lesson 2</p>
+  <h1>Who's in front? The depth buffer</h1>
+  <p class="subtitle">What it is, when it's written — and how your fold prims get occluded by walls they never share a pass with.</p>
+</header>
+
+<p>Lesson 1 was about what a color number <em>means</em>. This lesson is about a second buffer that
+rides alongside the color buffer and answers a different question: at each pixel, <strong>which
+surface is nearest the camera?</strong> Get this, and question 3 from your list — "how do the blend
+prims get a depth buffer even though they aren't in the opaque scene?" — stops being mysterious. The
+answer is that they <em>don't</em>, and that's exactly why it works.</p>
+
+<h2>1 · What the depth buffer is</h2>
+
+<p>The <strong>depth buffer</strong> (a.k.a. z-buffer) is a second image, same resolution as the
+screen, holding one number per pixel: the distance to the nearest surface drawn there so far, encoded
+0&nbsp;→&nbsp;1 (near&nbsp;→&nbsp;far). It exists to solve occlusion <em>without</em> sorting geometry
+on the CPU.</p>
+
+<p>The mechanism is the <strong>depth test</strong>, run per fragment as things rasterize:</p>
+<pre><code>incoming fragment at pixel P, with depth z
+  if z is nearer than depthBuffer[P]:
+      keep the fragment        (draw its color)
+      depthBuffer[P] = z       (record the new nearest)
+  else:
+      discard the fragment     (something already covers P)</code></pre>
+
+<p>Draw a wall, then draw a unit behind it in any order — the buffer sorts it out per pixel. That's
+the whole reason opaque 3D scenes don't need back-to-front sorting.</p>
+
+<div class="note">
+  Primary source for this section:
+  <a href="https://learnopengl.com/Advanced-OpenGL/Depth-testing"><span class="src">LearnOpenGL —
+  Depth testing.</span></a> Covers the z encoding, the test, and z-fighting (what happens when two
+  surfaces round to the same depth).
+</div>
+
+<h2>2 · The insight: test and write are two <em>separate</em> switches</h2>
+
+<p>This is the part that unlocks everything. Every material has <strong>two independent depth
+controls</strong>, and people conflate them constantly:</p>
+
+<div class="switches">
+  <div class="switch">
+    <h4>Depth <span style="color:var(--linear)">TEST</span> &nbsp;(read)</h4>
+    <p class="desc">"Compare my z against the buffer, and discard me if I'm behind." Decides whether
+    this fragment is <em>occluded</em>.</p>
+  </div>
+  <div class="switch">
+    <h4>Depth <span style="color:var(--gamma)">WRITE</span> &nbsp;(draw)</h4>
+    <p class="desc">"Record my z into the buffer so I occlude whatever comes after me." Decides
+    whether this fragment <em>occludes others</em>.</p>
+  </div>
+</div>
+
+<p>They're orthogonal — any combination is legal. Godot spells them out as <code>render_mode</code>
+flags, and your FFT codebase uses three combinations, each on purpose:</p>
+
+<table class="modes">
+  <tr><th><code>render_mode</code></th><th>Test?</th><th>Write?</th><th>Meaning · real example</th></tr>
+  <tr>
+    <td><code>depth_draw_opaque</code></td>
+    <td class="yes">yes</td><td class="yes">yes</td>
+    <td>Normal solid geometry. Occludes and is occluded.
+      <br><code>unit.gdshader</code> (the opaque unit).</td>
+  </tr>
+  <tr>
+    <td><code>depth_draw_never</code></td>
+    <td class="yes">yes</td><td class="no">no</td>
+    <td><strong>Occluded by the scene, but never occludes anything.</strong> The fold-prim case.
+      <br><code>unit_additive.gdshader</code>, <code>tile_overlay_mode0.gdshader</code>.</td>
+  </tr>
+  <tr>
+    <td><code>depth_test_disabled</code></td>
+    <td class="no">no</td><td class="no">no</td>
+    <td>Ignores depth entirely — always on top. Screen overlays / HUD.
+      <br><code>screen_color_mode0.gdshader</code>.</td>
+  </tr>
+</table>
+
+<h2>3 · Q2 — when is the depth buffer written?</h2>
+
+<p>During the <strong>opaque pass</strong> (Pass 1 of the diagram). Opaque units are
+<code>depth_draw_opaque</code>, so as they rasterize they stamp their z into the depth buffer. By the
+time the opaque pass ends, the depth buffer holds the nearest opaque surface at every pixel — the
+map, the walls, the standing units. Nothing in the seed / fold / out / tonemap passes writes depth;
+it's already done.</p>
+
+<h2>4 · Q3 — how do the blend prims get depth without being in the opaque scene?</h2>
+
+<div class="key">
+  <span class="label">The answer</span>
+  They don't get their own depth. The fold binds the opaque pass's <strong>already-written depth
+  buffer, read-only</strong>, and the prims <span class="chip linear">depth-TEST</span> against it
+  with <span class="chip gamma">depth-WRITE off</span>. So walls occlude the prims, but the prims
+  neither add to nor disturb the depth buffer.
+</div>
+
+<p>Your own shader comments say it outright. The additive unit:</p>
+
+<pre><code>// depth_draw_never: an additive, dematerialising sprite must not write opaque
+// depth (it still depth-TESTS against the map, so walls occlude it correctly).
+render_mode unshaded, shadows_disabled, depth_draw_never, blend_add;
+                                        //  ^ test ON (default), write OFF</code></pre>
+
+<p>Spike 1 confirmed this on the GPU: an additive prim placed <em>behind</em> an opaque wall read
+back <code>0.0</code> — fully rejected by the test. It never appeared, despite living in a totally
+separate render list from the opaque scene. The depth buffer doesn't care which pass or list a
+fragment came from; the test just reads the numbers that are already there.</p>
+
+<h3>The consequence that matters for your design</h3>
+
+<p>Because <em>none</em> of the fold prims write depth, <strong>they can't occlude each
+other</strong>. The <code>tile_overlay</code> comment nails it:</p>
+
+<pre><code>// depth_draw_never: still depth-TESTS against terrain via the OT depth we write,
+// but doesn't depth-WRITE, so overlapping tiles don't occlude each other.</code></pre>
+
+<p>So depth decides prim-vs-<em>world</em>, but it does <strong>not</strong> decide
+prim-vs-prim. That ordering has to come from somewhere else — and it does: the <strong>draw
+order</strong>, which is precisely what <code>OTDepthPrimOrder</code> controls (the "age within a
+depth bucket" sort in your plan). Depth-test handles occlusion; draw order handles blend order. Two
+different jobs, cleanly separated. We'll open up that sort in a later lesson.</p>
+
+<div class="note">
+  Contrast the third row: <code>screen_color_mode0.gdshader</code> adds <code>depth_test_disabled</code>
+  — its comment, "<span class="src">depth_test_disabled makes z irrelevant (always on top)</span>."
+  That's a fullscreen overlay that should ignore the world. The fold prims deliberately do
+  <em>not</em> disable the test — they want the walls to occlude them.
+</div>
+
+<h2>5 · Keyed to the passes</h2>
+
+<pre><code>Pass 1  opaque     <span style="color:#a5591a">WRITE</span> depth  ── units are depth_draw_opaque
+Pass A  seed       (depth untouched)
+Pass B  fold       <span style="color:#1f6f7a">TEST</span>  depth  ── prims depth_draw_never: test vs opaque, no write
+Pass C  out        (depth untouched)
+Pass 5  tonemap    (depth untouched)</code></pre>
+
+<p>One buffer, written once in Pass 1, read once in Pass B. That single read is the entire mechanism
+behind "the prims are correctly hidden by walls."</p>
+
+<h2>Check yourself</h2>
+<p>Commit before reading the feedback — retrieval is the point.</p>
+
+<div class="quiz" data-answer="0">
+  <p class="q">In this pipeline, the depth buffer is written:</p>
+  <div class="opts">
+    <button class="opt">during the opaque pass</button>
+    <button class="opt">during every fold pass</button>
+    <button class="opt">during the final tonemap</button>
+  </div>
+  <p class="feedback"
+     data-good="Opaque units are depth_draw_opaque; they stamp z in Pass 1. Later passes only read it."
+     data-bad="It's written in Pass 1 by the opaque units (depth_draw_opaque). Later passes read, not write."></p>
+</div>
+
+<div class="quiz" data-answer="0">
+  <p class="q">A fold prim (<code>depth_draw_never</code>, test on) behind an opaque wall ends up:</p>
+  <div class="opts">
+    <button class="opt">occluded by the wall</button>
+    <button class="opt">drawn over the wall</button>
+    <button class="opt">blended with wall</button>
+  </div>
+  <p class="feedback"
+     data-good="Its depth test fails against the wall's z, so the fragment is discarded — Spike 1's 0.0."
+     data-bad="Test is still ON, so it compares against the wall's z and loses — the fragment is discarded."></p>
+</div>
+
+<div class="quiz" data-answer="0">
+  <p class="q">Fold prims can't occlude <em>each other</em> because none of them:</p>
+  <div class="opts">
+    <button class="opt">write into depth</button>
+    <button class="opt">test the depth</button>
+    <button class="opt">read the depth</button>
+  </div>
+  <p class="feedback"
+     data-good="No writes → no prim ever enters the depth buffer, so prim-vs-prim order falls to draw order (OTDepthPrimOrder)."
+     data-bad="They all still TEST. What they skip is the WRITE — so none enters depth, and can't occlude a sibling."></p>
+</div>
+
+<div class="ask">
+  <strong>Ask me anything.</strong> If "test vs. write" still feels slippery, that's the exact spot to
+  push — it's the hinge of the whole lesson. Good pulls: <em>"walk me through the Spike 1 read-back
+  that returned 0.0,"</em> or <em>"show me where the fold framebuffer binds the opaque depth
+  read-only,"</em> or <em>"if prims don't write depth, what stops a far prim drawing over a near one?"</em>
+  (that last one is Lesson 4's cliff-hanger — draw order).
+</div>
+
+<div class="footer">
+  <p><strong>Primary source (read next):</strong>
+  <a href="https://learnopengl.com/Advanced-OpenGL/Depth-testing">LearnOpenGL — Depth Testing.</a>
+  Focus on the depth-test comparison and z-fighting; skim the projection-math section.
+  In-repo, the grounded source is <strong>Spike 1</strong> (the read-back that proved occlusion
+  across render lists) and the two shader comments quoted above.</p>
+
+  <p><strong>Previous:</strong> <a href="0001-linear-vs-gamma.html">Lesson 1 — Linear vs. gamma.</a>
+  &nbsp;·&nbsp; <strong>Next:</strong> <em>Filtering</em> — how a material's render settings decide
+  whether it goes to the opaque pass, the normal transparent pass, or the fold (handoff Q4). This is
+  where <code>depth_draw_opaque</code> vs. <code>blend_add</code> becomes a routing decision.</p>
+
+  <div class="pill-nav">
+    <a href="0001-linear-vs-gamma.html">← Lesson 1</a>
+    <a href="../engine-shaded-display-fold.md">The plan (5-pass diagram)</a>
+    <a href="../RESOURCES.md">Resources</a>
+    <a href="../GLOSSARY.md">Glossary</a>
+  </div>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

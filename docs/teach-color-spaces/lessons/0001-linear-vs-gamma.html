@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 1 · Linear vs. Gamma — and why "display" and "screen" are one space</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+
+<header class="masthead">
+  <p class="eyebrow">Color Spaces &amp; the Fold Pipeline · Lesson 1</p>
+  <h1>Two ways to put light in a number</h1>
+  <p class="subtitle">Linear vs. gamma — and why the plan's "display space" and "screen space" are the same space.</p>
+</header>
+
+<p>Every value in the pipeline you designed — a texel, a framebuffer pixel, a blend result — is
+just a number, usually between 0 and 1. This lesson answers one question: <strong>what does that
+number mean?</strong> There are exactly two answers, and almost every color bug in real-time
+rendering comes from confusing them. Everything else in this course — the depth buffer, the fold,
+the tonemap — sits on top of this one distinction.</p>
+
+<h2>1 · Linear: the number <em>is</em> the light</h2>
+
+<p>In a <span class="chip linear">linear</span> encoding, the number is directly proportional to
+physical light — photons hitting a sensor. <code>0.5</code> means half as many photons as
+<code>1.0</code>. Double the number, double the light.</p>
+
+<p>This is the encoding that <strong>math is correct in</strong>. When two lights overlap, their
+photons add: <code>0.3 + 0.4 = 0.7</code> worth of light, physically. When you average two pixels
+(a blur, a downscale, antialiasing), the average is only physically right if the numbers are
+linear. Lighting equations, shadows, blending real light — all of it assumes linear.</p>
+
+<div class="note">
+  This is the whole thesis of the canonical source for this lesson:
+  <span class="src">GPU Gems 3, Ch. 24, "The Importance of Being Linear."</span> Read it after this
+  lesson — link at the bottom.
+</div>
+
+<h2>2 · Gamma: the number is <em>perceived</em> brightness</h2>
+
+<p>In a <span class="chip gamma">gamma</span> encoding (the sRGB curve — the one your PNGs, your
+monitor cable, and PSX framebuffers use), the number is <strong>not</strong> proportional to light.
+It is bent by a curve — roughly <code>light&nbsp;=&nbsp;code<sup>2.2</sup></code> to decode, and
+<code>code&nbsp;=&nbsp;light<sup>1/2.2</sup></code> to encode.</p>
+
+<p>Why bend it? Two reasons, both real:</p>
+<p>• <strong>Human perception.</strong> Your eye is far more sensitive to differences in dark tones
+than bright ones. The gamma curve spends more of the available code values down in the darks, where
+you can actually see the steps. With only 8 bits (256 values) per channel, that's the difference
+between smooth shadows and visible banding.</p>
+<p>• <strong>History &amp; hardware.</strong> CRT monitors physically responded with a ~2.2 power
+curve, so images were pre-encoded to cancel it. That convention froze into sRGB, and it's still what
+a display expects at its input today.</p>
+
+<div class="key">
+  <span class="label">The gotcha that trips everyone</span>
+  A gamma <code>0.5</code> is <strong>not</strong> half the light. Decode it —
+  <code>0.5<sup>2.2</sup>&nbsp;≈&nbsp;0.21</code> — and it's only about <strong>21%</strong> of full
+  brightness. So adding two gamma numbers is <em>not</em> adding two lights. That single fact is why
+  the engine can't just blend wherever it likes, and it's the seed of your entire fold design.
+</div>
+
+<figure>
+  <div class="bar-demo">
+    <div style="background:#808080">code 0.50 → ~21% light</div>
+    <div style="background:#bbbbbb">code 0.74 → ~50% light</div>
+  </div>
+  <figcaption>These swatches are honest: your monitor is decoding them right now. The left one is the
+  <em>halfway code value</em> (<code>128/255</code>) yet emits only ~21% of the light of white. To
+  actually emit half the light, you need code ~0.74 (<code>#BBBBBB</code>, right). The curve is real
+  and it's in your face.</figcaption>
+</figure>
+
+<h2>3 · The knot: "display" vs. "screen"</h2>
+
+<p>Here is the thing you flagged as confusing, stated plainly:</p>
+
+<div class="key">
+  <span class="label">Terminology resolution</span>
+  In the design docs, <strong>"display space" and "screen space" are two names for the
+  <em>same</em> space</strong> — the <span class="chip gamma">gamma</span> (sRGB-family) encoding.
+  There is no third or fourth color space hiding here. What differs is not the space but the
+  <strong>pipeline stage</strong> where that same gamma encoding gets applied.
+</div>
+
+<p>The prior design notes used two words for one thing, and that's exactly what made it feel like
+there was a distinction to grasp. There isn't — as color spaces, they're identical. Read them like
+this:</p>
+
+<p>• <strong>"display"</strong> — the gamma values used <em>around the fold</em> (the seed → fold →
+copy-out passes), so the additive PSX blend happens in gamma, the way the original hardware did it.</p>
+<p>• <strong>"screen"</strong> — the gamma values produced <em>at the very end</em> by the tonemap
+pass, for the monitor.</p>
+
+<p>Same encoding, applied twice, for two different reasons, at two different moments. That's the
+entire "display vs. screen" mystery. We'll pin down each of those moments, pass by pass, in later
+lessons — but you now have the key that unlocks them.</p>
+
+<div class="note">
+  This resolution is now a <a href="../GLOSSARY.md">workspace convention</a>. Every later lesson
+  uses "gamma space" as the real name, and treats "display" / "screen" as <em>stage</em> labels on
+  that one space.
+</div>
+
+<h2>4 · Why this is the foundation of your plan</h2>
+
+<p>Your engine does lighting in <span class="chip linear">linear</span> (because the math must be
+right). But the PSX look <em>requires</em> the additive fold to happen in <span class="chip gamma">gamma</span>
+(because that's where the original hardware added its sprites, and adding in linear gives the wrong
+colors). So the pipeline has to leave linear, do the fold in gamma, and come back:</p>
+
+<pre><code>lighting        the fold (PSX)        back to engine       monitor
+<span style="color:#1f6f7a">linear</span>  ──▶  <span style="color:#a5591a">display (gamma)</span>  ──▶  <span style="color:#1f6f7a">linear</span>  ──▶  <span style="color:#a5591a">screen (gamma)</span>
+          seed A          fold B      out C           tonemap
+</code></pre>
+
+<p>That's the whole <a href="../engine-shaded-display-fold.md">5-pass diagram</a> in one line. Notice
+<span class="chip gamma">display</span> and <span class="chip gamma">screen</span> are the same amber
+— one space, two stops. The fold is a <strong>bracketed gamma excursion inside a linear
+pipeline</strong>. Don't worry yet about <em>who</em> does each arrow or <em>how</em> — that's the
+rest of the course. Today's win is just: you can read that line and know what every word means.</p>
+
+<h2>Check yourself</h2>
+<p>No peeking — commit to an answer, then read the feedback. This is retrieval practice; the effort
+is the point.</p>
+
+<div class="quiz" data-answer="0">
+  <p class="q">A mid-gray sRGB code value of 0.5 represents how much physical light?</p>
+  <div class="opts">
+    <button class="opt">roughly 21 percent</button>
+    <button class="opt">exactly 50 percent</button>
+    <button class="opt">roughly 74 percent</button>
+  </div>
+  <p class="feedback"
+     data-good="Decode it: 0.5^2.2 ≈ 0.21. The halfway code is nowhere near halfway in light."
+     data-bad="Decode the code value: 0.5 raised to 2.2 ≈ 0.21. The curve pulls it way down."></p>
+</div>
+
+<div class="quiz" data-answer="1">
+  <p class="q">In the design docs, "display space" and "screen space" refer to:</p>
+  <div class="opts">
+    <button class="opt">two gamma spaces</button>
+    <button class="opt">one gamma space</button>
+    <button class="opt">one linear space</button>
+  </div>
+  <p class="feedback"
+     data-good="One gamma space, applied at two stages — around the fold, and again at tonemap."
+     data-bad="Same encoding, different stage. It's ONE gamma space named twice, not two spaces."></p>
+</div>
+
+<div class="quiz" data-answer="2">
+  <p class="q">Adding two lights (a blend) is only physically correct in which encoding?</p>
+  <div class="opts">
+    <button class="opt">the gamma one</button>
+    <button class="opt">the sRGB one</button>
+    <button class="opt">the linear one</button>
+  </div>
+  <p class="feedback"
+     data-good="Linear: the number is the light, so numbers add the way photons add."
+     data-bad="Gamma numbers are bent by a curve, so they don't add like light. Linear does."></p>
+</div>
+
+<div class="ask">
+  <strong>I'm your teacher — ask me anything.</strong> If any step here felt like it skipped a beat,
+  say so and I'll go finer, not broader. Good things to push on: <em>"show me the sRGB curve is
+  really ~2.2 and not exactly 2.2,"</em> or <em>"pull up the actual line in the fold shader where the
+  texel stays in display space,"</em> or <em>"why does adding in linear look wrong for PSX
+  specifically?"</em>
+</div>
+
+<div class="footer">
+  <p><strong>Primary source (read this next):</strong>
+  <a href="https://developer.nvidia.com/gpugems/gpugems3/part-iv-image-effects/chapter-24-importance-being-linear">GPU
+  Gems 3, Ch. 24 — "The Importance of Being Linear."</a> The canonical treatment; §24.1–24.2 cover
+  everything above with the real curve. Friendlier alternative:
+  <a href="https://blog.johnnovak.net/2016/09/21/what-every-coder-should-know-about-gamma/">John
+  Novak, "What Every Coder Should Know About Gamma."</a></p>
+
+  <p><strong>Next lesson:</strong> the <em>depth buffer</em> — what it is, and (the part that matters
+  for your plan) how the blend prims get depth-tested even though they're never in the opaque scene.
+  That's handoff questions 2–3.</p>
+
+  <div class="pill-nav">
+    <a href="../engine-shaded-display-fold.md">The plan (5-pass diagram)</a>
+    <a href="../RESOURCES.md">All resources</a>
+    <a href="../GLOSSARY.md">Glossary</a>
+  </div>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 5 · The round trip — linear → display → linear → screen</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .passes { width: 100%; border-collapse: collapse; margin: 1.2rem 0; font-size: .86rem; }
+  .passes th, .passes td { border: 1px solid var(--rule); padding: .5rem .6rem; vertical-align: top; text-align: left; }
+  .passes th { background: var(--code-bg); font-weight: 600; }
+  .passes td.enc { white-space: nowrap; font-family: ui-monospace, Menlo, monospace; font-size: .82em; }
+  .lin { color: var(--linear); font-weight: 600; }
+  .gam { color: var(--gamma); font-weight: 600; }
+  .flow { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: .8rem;
+          line-height: 1.7; background: var(--code-bg); border: 1px solid var(--rule);
+          border-radius: .4rem; padding: 1.1rem 1.1rem; overflow-x: auto; }
+  .caveat { background: #fff6f2; border: 1px solid #e6c4b4; border-left: 4px solid var(--gamma);
+            border-radius: .25rem; padding: 1rem 1.2rem; margin: 1.6rem 0; }
+  .caveat .label { font-size: .7rem; letter-spacing: .14em; text-transform: uppercase;
+            color: var(--gamma); font-weight: 700; display: block; margin-bottom: .3rem; }
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <p class="eyebrow">Color Spaces &amp; the Fold Pipeline · Lesson 5</p>
+  <h1>The round trip</h1>
+  <p class="subtitle">linear → display → linear → screen, pass by pass. Everything so far, assembled.</p>
+</header>
+
+<p>You have all the pieces now: two encodings (L1), the depth buffer (L2), the routing (L3), and where
+the color space lives in the data (L4). This lesson spends them. Question 5 — <em>why linear →
+display → linear → screen?</em> — is really four questions, one per arrow. We'll answer each with the
+same tool: <strong>a fragment must be encoded to match the buffer it writes into</strong> (the
+destination-encoding rule), and the fold needs a <span class="chip gamma">gamma</span> buffer.</p>
+
+<h2>1 · The whole trip, annotated</h2>
+
+<div class="flow">
+Pass 1        Pass A          Pass B            Pass C           Pass 5
+opaque        seed            fold              out              tonemap
+<span class="lin">LINEAR</span>  ──▶  <span class="gam">DISPLAY</span>  ──▶  <span class="gam">DISPLAY</span>  ──▶  <span class="lin">LINEAR</span>  ──▶  <span class="gam">SCREEN</span>
+  scene      encode          add prims          decode           encode
+           linear→display   (gamma blend)    display→linear     linear→screen
+                                             + RGB555 quantize
+</div>
+
+<p>Two things to notice before the details. First, <span class="chip gamma">DISPLAY</span> and
+<span class="chip gamma">SCREEN</span> are the <strong>same amber</strong> — the same gamma space
+(your L1 payoff), just at two stops. Second, the trip is a <strong>bracketed gamma excursion</strong>:
+it leaves linear only for the fold, then returns, so the fold is the <em>only</em> thing that happens
+in gamma.</p>
+
+<h2>2 · One row per arrow</h2>
+
+<p>Grounded in the consumer's own header, <code>CombatDisplaySpaceComposite.gd:25–36</code>:</p>
+
+<table class="passes">
+  <tr><th>Pass</th><th class="enc">encoding</th><th>Why <em>this</em> encoding</th></tr>
+  <tr>
+    <td><strong>1 · opaque</strong></td>
+    <td class="enc"><span class="lin">linear</span></td>
+    <td>Forward+ renders the scene in linear HDR — lighting math must be linear (L1). Units run
+      <code>pow(2.2)</code> to land here. Depth written here (L2).</td>
+  </tr>
+  <tr>
+    <td><strong>A · seed</strong></td>
+    <td class="enc"><span class="lin">linear</span>→<span class="gam">display</span></td>
+    <td>Copy the opaque scene into the scratch, <em>encoding</em> to display, so the scratch is a
+      gamma-encoded copy of the background. Coverage α seeded to 0. Now the fold has a gamma canvas.</td>
+  </tr>
+  <tr>
+    <td><strong>B · fold</strong></td>
+    <td class="enc"><span class="gam">display</span></td>
+    <td>Draw the flagged prims (resolved display colors, L4) with hardware <code>add</code>/<code>sub</code>/<code>mix</code>,
+      in <code>OTDepthPrimOrder</code>, depth-tested vs. the opaque depth. <strong>Both operands are
+      gamma → the add is a gamma add</strong> (L4). This is the PSX look. No encoding change here —
+      just the blend.</td>
+  </tr>
+  <tr>
+    <td><strong>C · out</strong></td>
+    <td class="enc"><span class="gam">display</span>→<span class="lin">linear</span></td>
+    <td>Resolve the scratch back into the scene, <em>decoding</em> to linear (+ RGB555 quantize,
+      discard untouched pixels). The folded result re-enters the engine's linear pipeline so it
+      tonemaps like everything else.</td>
+  </tr>
+  <tr>
+    <td><strong>5 · tonemap</strong></td>
+    <td class="enc"><span class="lin">linear</span>→<span class="gam">screen</span></td>
+    <td>Map linear HDR down to displayable range and <em>encode</em> to sRGB for the monitor. The
+      monitor expects gamma at its input (L1). Covered next lesson.</td>
+  </tr>
+</table>
+
+<h2>3 · So, the four "why"s in one breath</h2>
+
+<p><strong>Why leave linear (A)?</strong> Because adding PSX additives in linear is *the defect* — the
+fold must be a gamma add, which needs a gamma buffer. <strong>Why stay display (B)?</strong> Because
+that's where the blend happens; the whole excursion exists for this one step. <strong>Why go back to
+linear (C)?</strong> So the result rejoins the engine's linear pipeline — otherwise the tonemap, which
+expects linear, would mangle it. <strong>Why encode to screen (5)?</strong> Because the monitor is a
+gamma device. Leave → do the one gamma thing → come back → hand off to the display.</p>
+
+<h2>4 · Where the color actually changes (your round-trip question)</h2>
+
+<p>You asked earlier whether <span class="chip gamma">display</span>→<span class="chip linear">linear</span>
+changes the color or is "just re-encoding." Now you can see it in the table: the <strong>encode/decode
+arrows (A and C) are faithful</strong> — same light, different representation. The color only moves in
+<strong>two</strong> places:</p>
+<p>• <strong>Pass B</strong> — the gamma-domain add. This is the intended change (the PSX look). A
+linear-domain add of the same prims would give different numbers; that difference is the entire point.</p>
+<p>• <strong>Pass C's RGB555 quantize</strong> — a deliberate lossy step (PSX 5-bit color). The
+<em>decode</em> sitting next to it is lossless; the <em>quantize</em> is the loss.</p>
+<p>Everything else is a change of coordinates, not of color.</p>
+
+<h2>5 · The honest edges</h2>
+
+<div class="caveat">
+  <span class="label">Three things this lesson is not glossing</span>
+  <p style="margin:.3rem 0">• <strong>Seed clamps HDR.</strong> The opaque scene is linear HDR (can
+  exceed 1.0); the display scratch is UNORM <code>[0,1]</code>. Encoding in Pass A clamps anything
+  over 1 — a real change, but a <em>range</em> effect, not the decode.</p>
+  <p style="margin:.3rem 0">• <strong>Pass B in display is guaranteed for the particle fold, open for
+  engine-drawn units.</strong> The real unit material would first have to suppress its line-923
+  <code>pow</code> (L4 / open question #1). Don't assume it's free.</p>
+  <p style="margin:.3rem 0">• <strong>Linear tonemap is mandatory.</strong> The header says it:
+  <em>"Run under Linear tonemap (ACES/AgX corrupt the add)."</em> Why an S-curve tonemap would break
+  the fold is exactly Lesson 6.</p>
+</div>
+
+<h2>6 · Keyed diagram (the payoff)</h2>
+
+<pre><code>          leave linear        the ONE gamma thing        return          hand off
+scene ──▶ [A encode] ──▶ scratch [B gamma add] ──▶ [C decode+quantize] ──▶ scene ──▶ [5 tonemap] ──▶ monitor
+<span class="lin">linear</span>       <span class="gam">display</span>            <span class="gam">display</span>              <span class="lin">linear</span>                  <span class="lin">linear</span>       <span class="gam">screen</span>
+</code></pre>
+
+<h2>Check yourself</h2>
+<p>Commit before reading the feedback.</p>
+
+<div class="quiz" data-answer="0">
+  <p class="q">The pipeline leaves linear for the fold because PSX additives must:</p>
+  <div class="opts">
+    <button class="opt">blend inside gamma</button>
+    <button class="opt">blend inside linear</button>
+    <button class="opt">blend inside depth</button>
+  </div>
+  <p class="feedback"
+     data-good="Right — a gamma add needs a gamma buffer, so we bracket a display excursion around just the fold."
+     data-bad="Adding additives in linear is the defect. The fold must be a gamma add — hence the display excursion."></p>
+</div>
+
+<div class="quiz" data-answer="0">
+  <p class="q">By itself, the Pass C <code>display→linear</code> decode:</p>
+  <div class="opts">
+    <button class="opt">preserves the color</button>
+    <button class="opt">reshapes the color</button>
+    <button class="opt">saturates the color</button>
+  </div>
+  <p class="feedback"
+     data-good="Yes — decode is the faithful inverse of encode. The color moves in the fold and the quantize, not here."
+     data-bad="The decode is a faithful inverse (same light). The color changes in Pass B's add and Pass C's RGB555 quantize."></p>
+</div>
+
+<div class="quiz" data-answer="0">
+  <p class="q">Which pass encodes the final <code>linear→screen</code> for the monitor?</p>
+  <div class="opts">
+    <button class="opt">the tonemap pass</button>
+    <button class="opt">the copy-in pass</button>
+    <button class="opt">the copy-out pass</button>
+  </div>
+  <p class="feedback"
+     data-good="Right — tonemap maps linear HDR down and encodes to sRGB, because the monitor is a gamma device."
+     data-bad="Tonemap (Pass 5) does linear→screen. Copy-in seeds display; copy-out decodes back to linear."></p>
+</div>
+
+<div class="ask">
+  <strong>Ask me anything.</strong> Good pulls: <em>"trace one pixel's actual number through all five
+  passes,"</em> or <em>"if Pass C decodes back to linear, why not just skip A and C and fold in linear?"</em>
+  (answer: then it's a linear add — the defect), or <em>"what does the coverage α actually do in C?"</em>
+</div>
+
+<div class="footer">
+  <p><strong>Primary source:</strong> <code>CombatDisplaySpaceComposite.gd:25–36</code> (the A/B/C pass
+  contract, in the consumer's own words) and <code>engine-shaded-display-fold.md</code> §4 (the
+  diagram). External backup on why the round trip is faithful:
+  <a href="https://developer.nvidia.com/gpugems/gpugems3/part-iv-image-effects/chapter-24-importance-being-linear">GPU
+  Gems 3, Ch. 24.</a></p>
+
+  <p><strong>Previous:</strong> <a href="0004-raw-texel.html">Lesson 4 — The raw texel.</a>
+  &nbsp;·&nbsp; <strong>Next:</strong> <em>Tonemap</em> (handoff Q7) — what the final
+  <code>linear→screen</code> step actually does, and why your compositor <strong>requires</strong>
+  Linear tonemap (ACES/AgX would corrupt the additive result). The last arrow, explained.</p>
+
+  <div class="pill-nav">
+    <a href="0004-raw-texel.html">← Lesson 4</a>
+    <a href="../engine-shaded-display-fold.md">The plan (5-pass diagram)</a>
+    <a href="../RESOURCES.md">Resources</a>
+    <a href="../GLOSSARY.md">Glossary</a>
+  </div>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

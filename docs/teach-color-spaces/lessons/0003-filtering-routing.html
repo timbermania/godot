@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 3 · The filter — what lands in the opaque scene, and what gets folded</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .tree { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: .82rem;
+          line-height: 1.5; background: var(--code-bg); border: 1px solid var(--rule);
+          border-radius: .4rem; padding: 1rem 1.1rem; overflow-x: auto; }
+  .tree .op { color: var(--linear); font-weight: 600; }
+  .tree .fold { color: var(--gamma); font-weight: 600; }
+  .cond { width: 100%; border-collapse: collapse; margin: 1.1rem 0; font-size: .87rem; }
+  .cond th, .cond td { border: 1px solid var(--rule); padding: .45rem .6rem; text-align: left; }
+  .cond th { background: var(--code-bg); font-weight: 600; }
+  .cond code { font-size: .82em; }
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <p class="eyebrow">Color Spaces &amp; the Fold Pipeline · Lesson 3</p>
+  <h1>The filter: who's opaque, who gets folded</h1>
+  <p class="subtitle">How a material's render settings route it to the opaque pass, the normal transparent pass, or your fold — decided once per surface, per frame.</p>
+</header>
+
+<p>Question 4 on your list: <em>"How are we filtering what does and does not get rendered in the
+opaque scene?"</em> The short answer: <strong>the engine sorts every surface into a render list
+based on its material's render settings, and the opaque list is one of them.</strong> Nothing
+"decides to be opaque" at runtime — it's a static property of the material, read once as the render
+lists are built. And the best part: it's not a black box. It's on this branch, and we'll read the
+actual lines.</p>
+
+<h2>1 · Two levels of filtering</h2>
+
+<p>There are exactly two decisions, in order:</p>
+<p><strong>Level 1 — opaque or transparent?</strong> Godot's built-in split. Determines the OPAQUE
+list vs. the transparent (ALPHA) list.</p>
+<p><strong>Level 2 — normal transparent, or folded?</strong> <em>Your</em> Spike-1 engine change. Among
+the transparents, peel off the ones flagged <code>compositor_fold</code> into a separate fold list.</p>
+
+<h2>2 · Level 1 — the opaque/transparent split is one function</h2>
+
+<p>When the engine builds a surface's cache, it asks the material a single yes/no question —
+<code>uses_alpha_pass()</code> — and sets one flag. Here is the <em>real</em> function on this branch
+(<code>scene_shader_forward_clustered.h:283</code>):</p>
+
+<pre><code>bool uses_alpha_pass() const {
+    bool has_alpha       = uses_alpha || uses_blend_alpha || has_read_screen_alpha;
+    bool no_depth_draw   = depth_draw == DEPTH_DRAW_DISABLED;   // render_mode depth_draw_never
+    bool no_depth_test   = depth_test != DEPTH_TEST_ENABLED;    // render_mode depth_test_disabled
+    return has_alpha || has_read_screen_alpha || no_depth_draw || no_depth_test;
+}</code></pre>
+
+<p>Read it as a rule: a material is <strong>transparent</strong> if <em>any</em> of these is true —</p>
+
+<table class="cond">
+  <tr><th>Condition</th><th>Triggered by</th></tr>
+  <tr><td><code>uses_alpha</code></td><td>the fragment writes <code>ALPHA</code> &lt; 1 (real translucency)</td></tr>
+  <tr><td><code>uses_blend_alpha</code></td><td>a non-mix blend — <code>blend_add</code> / <code>blend_sub</code> / <code>blend_mul</code></td></tr>
+  <tr><td><code>no_depth_draw</code></td><td><code>render_mode depth_draw_never</code></td></tr>
+  <tr><td><code>no_depth_test</code></td><td><code>render_mode depth_test_disabled</code></td></tr>
+</table>
+
+<p>Otherwise — none of those — it's <strong>opaque</strong>, and the engine also stamps it
+<code>FLAG_PASS_DEPTH</code> so it writes into the depth buffer. That last part is <em>literally the
+same decision</em> as "who writes depth in Pass 1" from Lesson 2: opaque ⇒ depth prepass ⇒ writes z.</p>
+
+<div class="key">
+  <span class="label">The connection to Lesson 2</span>
+  Look at the last two conditions. <strong>Turning off <em>either</em> depth switch —
+  <code>depth_draw_never</code> or <code>depth_test_disabled</code> — is <em>by itself</em> enough to
+  make a material transparent.</strong> That's why your fold prims are never in the opaque scene: an
+  additive unit (<code>blend_add</code>, <code>depth_draw_never</code>) trips <em>three</em> of these
+  conditions at once. The "depth" lesson and the "filter" lesson are the same switches seen from two
+  angles.
+</div>
+
+<h2>3 · Level 2 — the fold split (your engine change)</h2>
+
+<p>Once Level 1 has tagged a surface <code>FLAG_PASS_ALPHA</code>, the render-list loop decides which
+transparent list it joins. This is the code Spike 1 added
+(<code>render_forward_clustered.cpp:1146–1160</code>):</p>
+
+<pre><code>// opaque surfaces → the opaque render list
+if (surf-&gt;flags &amp; (FLAG_PASS_DEPTH | FLAG_PASS_OPAQUE)) {
+    rl-&gt;add_element(surf);
+}
+
+// transparent surfaces → split by the compositor_fold flag
+if (surf-&gt;flags &amp; FLAG_PASS_ALPHA) {
+    if (surf-&gt;shader-&gt;compositor_fold) {
+        render_list[RENDER_LIST_COMPOSITOR_FOLD].add_element(surf);   // your fold list
+    } else {
+        render_list[RENDER_LIST_ALPHA].add_element(surf);             // normal transparent
+    }
+}</code></pre>
+
+<p>And the flag itself is a first-class <code>render_mode</code>, registered in
+<code>shader_types.cpp:245</code> with the comment <em>"route this material's shaded transparent
+output into the compositor fold scratch buffer."</em> A material opts in just by writing
+<code>render_mode … compositor_fold;</code> — it still shades through its real pipeline; the engine
+only retargets <em>where the result lands.</em></p>
+
+<h2>4 · The whole filter, in one tree</h2>
+
+<div class="tree">
+every surface, once per frame
+│
+├─ <span class="op">uses_alpha_pass() == false</span>  ──▶  RENDER_LIST_<span class="op">OPAQUE</span>      (Pass 1 · writes depth)
+│
+└─ uses_alpha_pass() == true   (has alpha, or add/sub blend, or a depth switch off)
+   │
+   ├─ shader.compositor_fold == true   ──▶  RENDER_LIST_<span class="fold">COMPOSITOR_FOLD</span>  (Pass B · your fold)
+   │
+   └─ shader.compositor_fold == false  ──▶  RENDER_LIST_ALPHA         (normal transparent)
+</div>
+
+<p>Three destinations, two questions, both answered from the material alone. Your standing units
+(<code>unit.gdshader</code>, opaque) take the top branch — "free" in the opaque scene, writing depth
+for everyone else to test against. The flagged additive/sub/mix prims take the middle branch into the
+fold. Ordinary transparents (an unflagged HUD blend) take the bottom.</p>
+
+<div class="note">
+  The fold list is then sorted by <code>sort_by_priority()</code>, not by depth — the comment on
+  <code>render_forward_clustered.cpp:1928</code> says it outright: <em>"fold in the CALLER's order
+  (render_priority = OTDepthPrimOrder run index), NOT camera depth."</em> That's the draw-order hook
+  Lesson 2 promised — the prims don't self-occlude, so their blend order comes from this sort. We'll
+  open it fully in a later lesson.
+</div>
+
+<h2>5 · Keyed to the passes</h2>
+
+<p>The filter runs <em>before</em> any drawing — it's the list-building step that feeds the passes:</p>
+
+<pre><code>build render lists   ── the filter above runs here (per surface)
+Pass 1  opaque       ── draws RENDER_LIST_OPAQUE,          writes depth
+Pass A  seed         ── (compositor)
+Pass B  fold         ── draws RENDER_LIST_COMPOSITOR_FOLD, ordered, into the display scratch
+Pass C  out          ── (compositor)
+        + normal transparent draws RENDER_LIST_ALPHA as usual</code></pre>
+
+<h2>Check yourself</h2>
+<p>Commit before reading the feedback.</p>
+
+<div class="quiz" data-answer="0">
+  <p class="q">Which single <code>render_mode</code> flag, on its own, forces a material out of the opaque scene?</p>
+  <div class="opts">
+    <button class="opt">depth_draw_never</button>
+    <button class="opt">depth_draw_always</button>
+    <button class="opt">shadows_disabled</button>
+  </div>
+  <p class="feedback"
+     data-good="Yes — no_depth_draw alone makes uses_alpha_pass() return true, so it's transparent."
+     data-bad="Look at uses_alpha_pass(): no_depth_draw (depth_draw_never) alone flips it to transparent."></p>
+</div>
+
+<div class="quiz" data-answer="0">
+  <p class="q">The <code>compositor_fold</code> flag pulls a surface out of which list?</p>
+  <div class="opts">
+    <button class="opt">the alpha list</button>
+    <button class="opt">the opaque list</button>
+    <button class="opt">the shadow list</button>
+  </div>
+  <p class="feedback"
+     data-good="Right — the split happens inside the FLAG_PASS_ALPHA branch; flagged surfaces divert from ALPHA to the fold list."
+     data-bad="It only acts on transparents: inside the FLAG_PASS_ALPHA branch, it diverts from ALPHA to the fold list."></p>
+</div>
+
+<div class="quiz" data-answer="0">
+  <p class="q">The opaque-vs-transparent decision is made per surface based on:</p>
+  <div class="opts">
+    <button class="opt">the render mode</button>
+    <button class="opt">the camera view</button>
+    <button class="opt">the frame index</button>
+  </div>
+  <p class="feedback"
+     data-good="It's a static material property (uses_alpha_pass), read once as lists build — not a runtime/view decision."
+     data-bad="It's static: uses_alpha_pass() reads the material's render_mode/alpha, independent of camera or frame."></p>
+</div>
+
+<div class="ask">
+  <strong>Ask me anything.</strong> Strong pulls here: <em>"open <code>render_forward_clustered.cpp</code>
+  at 1146 and walk the loop with me,"</em> or <em>"what sets <code>uses_blend_alpha</code> — where does
+  blend_add become 'has alpha'?"</em>, or <em>"why does the opaque branch also get FLAG_PASS_DEPTH but
+  the fold branch doesn't?"</em> (that's the Lesson-2 depth-write decision, same fork in the road).
+</div>
+
+<div class="footer">
+  <p><strong>Primary source (in-repo, grounded):</strong> the Spike-1 engine diff on this branch —
+  <code>scene_shader_forward_clustered.h:283</code> (<code>uses_alpha_pass</code>),
+  <code>render_forward_clustered.cpp:1146–1160</code> (the routing loop),
+  <code>shader_types.cpp:245</code> (the <code>compositor_fold</code> render_mode). External backup:
+  <a href="https://docs.godotengine.org/en/stable/tutorials/shaders/shader_reference/spatial_shader.html">Godot
+  — Spatial shader <code>render_mode</code> reference</a> (blend/depth modes).</p>
+
+  <p><strong>Previous:</strong> <a href="0002-depth-buffer.html">Lesson 2 — The depth buffer.</a>
+  &nbsp;·&nbsp; <strong>Next:</strong> <em>The raw texel</em> — why the prims that land in the fold are
+  already carrying <span class="chip gamma">display</span>-space values, so the hardware blend adds in
+  gamma (handoff Q6). This is where Lesson 1 and the fold finally meet.</p>
+
+  <div class="pill-nav">
+    <a href="0002-depth-buffer.html">← Lesson 2</a>
+    <a href="../engine-shaded-display-fold.md">The plan (5-pass diagram)</a>
+    <a href="../RESOURCES.md">Resources</a>
+    <a href="../GLOSSARY.md">Glossary</a>
+  </div>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

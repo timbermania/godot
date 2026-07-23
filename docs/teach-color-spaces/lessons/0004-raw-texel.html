@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 4 · The raw texel — where the color space lives in the data</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  .caveat { background: #fff6f2; border: 1px solid #e6c4b4; border-left: 4px solid var(--gamma);
+            border-radius: .25rem; padding: 1rem 1.2rem; margin: 1.6rem 0; }
+  .caveat .label { font-size: .7rem; letter-spacing: .14em; text-transform: uppercase;
+            color: var(--gamma); font-weight: 700; display: block; margin-bottom: .3rem; }
+  .flow { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: .82rem;
+          line-height: 1.6; background: var(--code-bg); border: 1px solid var(--rule);
+          border-radius: .4rem; padding: 1rem 1.1rem; overflow-x: auto; }
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <p class="eyebrow">Color Spaces &amp; the Fold Pipeline · Lesson 4</p>
+  <h1>The raw texel</h1>
+  <p class="subtitle">Where Lesson 1 meets the fold: the color space isn't in the blender — it's in the numbers you feed it.</p>
+</header>
+
+<p>You now have the two halves. Lesson 1: numbers are either <span class="chip linear">linear</span>
+or <span class="chip gamma">gamma</span>. Lessons 2–3: which surfaces reach the fold, and why. This
+lesson joins them by answering question 6 — <em>what is a raw texel?</em> — and through it, the
+load-bearing insight of your entire design: <strong>a hardware blend has no color space of its own;
+it inherits the color space of the numbers going in.</strong></p>
+
+<h2>1 · A texel, and what Godot normally does to it</h2>
+
+<p>A <strong>texel</strong> is one sample read from a texture — the value at a texture coordinate.
+Nothing exotic.</p>
+
+<p>The subtlety is what happens on the way out of the sampler. In Godot, if you declare a color
+texture with <code>source_color</code> (the sRGB hint), the GPU <strong>decodes it sRGB → linear as
+you sample it</strong>. That's deliberate and correct: it drops your texel into linear space so the
+lighting math (Lesson 1) is right. Most color textures in a 3D scene work exactly this way.</p>
+
+<h2>2 · A "raw" texel is one sampled with <em>no</em> such conversion</h2>
+
+<div class="key">
+  <span class="label">Definition</span>
+  A <strong>raw texel</strong> is a texture sample taken <em>without</em> <code>source_color</code> —
+  so Godot applies <strong>no sRGB → linear conversion</strong>. The stored bytes come out verbatim,
+  in whatever encoding they were authored in.
+</div>
+
+<p>Your PSX unit atlas is sampled exactly this way. From
+<code>unit_sprite_body.gdshaderinc:640</code>:</p>
+
+<pre><code>// No source_color - PSX textures are not sRGB. We convert to linear at the end.
+uniform sampler2D type1_tex :
+    filter_nearest,
+    hint_default_transparent ;      // &lt;- note: no source_color</code></pre>
+
+<p>Why raw here? Because this texture isn't a picture — <strong>it's a table of palette
+indices</strong>. The comment at line 657 spells it out: <em>"an indexed-grayscale TGA (each pixel =
+palette index 0–15 scaled to 0–255)."</em> A value like <code>153</code> means "palette entry 9,"
+not "60% bright." Two consequences, both visible in that sampler declaration:</p>
+<p>• <code>filter_nearest</code> — never bilinear-blend indices (averaging index 3 and index 9 gives
+index 6, a garbage color).</p>
+<p>• <strong>no <code>source_color</code></strong> — never sRGB-decode an index (it isn't light; the
+math would be meaningless). You need the exact stored byte to look up the palette.</p>
+
+<h2>3 · Indices don't get added — colors do</h2>
+
+<p>Here's the ordering that (rightly) trips people up: <strong>the raw index never reaches the
+blender.</strong> Inside the fragment, the index is resolved to a real color <em>first</em>, and only
+that color is added. From <code>unit_sprite_body.gdshaderinc:510–525</code>:</p>
+
+<pre><code>float idx_f = texture(tex, uv).r * 15.0;              // 1. raw index  (grayscale byte → 0–15)
+...
+vec4 color = texture(palette_tex, palette_uv).rgba;  // 2. palette lookup → a real RGBA color
+...                                                  // 3. tint / ambient → ALBEDO
+// 4. the hardware ADD runs OUTSIDE the shader, on the resolved ALBEDO — never on the index</code></pre>
+
+<p>You do <em>not</em> add indices — that would be meaningless. Palette lookup happens in step 2; the
+blend happens in step 4, <strong>after</strong> the color is applied. So there are <strong>two</strong>
+independent uses of "no <code>source_color</code>," doing different jobs — don't conflate them:</p>
+
+<table class="cond">
+  <tr><th>Where</th><th>What "no <code>source_color</code>" buys</th></tr>
+  <tr>
+    <td>the <strong>index</strong> texture (<code>type1_tex</code>) — plus <code>filter_nearest</code></td>
+    <td>protects the lookup <em>key</em> (an index isn't light — decoding or blurring it corrupts the
+      lookup). <strong>Nothing to do with color space.</strong></td>
+  </tr>
+  <tr>
+    <td>the <strong>palette</strong> texture (<code>type1_palette</code>)</td>
+    <td>the resolved color comes out in the palette's stored <span class="chip gamma">display</span>
+      encoding, <em>un-linearized</em>. <strong>This</strong> is what makes the later ADD a gamma add.</td>
+  </tr>
+</table>
+
+<p>"Raw index" and "display-space color" are <em>different links in the chain</em>, with the palette
+lookup between them. What the blender adds is the resolved color — and it's a gamma add iff that color
+is a gamma number, which it stays as long as neither the palette sample nor a final <code>pow</code>
+linearizes it.</p>
+
+<h2>4 · The load-bearing insight: the blend has no color space</h2>
+
+<p>Here is the sentence your whole architecture rests on, from
+<code>engine-shaded-display-fold.md</code> §3:</p>
+
+<div class="key">
+  <span class="label">The insight</span>
+  The hardware blender is <strong>color-space-agnostic</strong>. <code>BLEND_OP_ADD</code> computes
+  <code>dst + src</code> on the raw numbers in the attachment — it has no notion of linear vs. gamma.
+  A blend is a <span class="chip gamma">gamma</span>-space blend <em>iff both operands hold gamma
+  numbers</em> — regardless of who issues the draw.
+</div>
+
+<p>So "blending in display space" is not a mode you switch on. It's what you <em>get</em> when both
+inputs are display numbers. Your compositor's fold fragment says this in its own words
+(<code>combat_displayspace_composite.glsl:258</code>):</p>
+
+<pre><code>// The sprite texel is raw sRGB/display (the mode shaders declare NO source_color),
+// so the contribution stays in DISPLAY space; the blend adds it to the display-space
+// scratch ... gamma is intentionally unused — linearizing the texel IS the defect
+// this compositor removes.</code></pre>
+
+<p>Read that last clause slowly, because it's the punchline. The <em>defect</em> the compositor
+exists to fix is <strong>linearizing the texel</strong>. Keep the resolved color un-linearized
+(display), add it to a display scratch, and the hardware <code>ADD</code> is automatically a gamma
+add — the PSX look — with no special blend mode. The color space rode in on the data.</p>
+
+<h2>5 · The honest caveat (this is exactly your open question #1)</h2>
+
+<p>"Raw texel" describes the <em>input</em> sample. Whether the fragment's <em>output</em> is still
+display depends on what the shader does at the very end — and here the files disagree in a way the
+plan flags as unresolved.</p>
+
+<div class="caveat">
+  <span class="label">Read the two files side by side</span>
+  <p style="margin:.3rem 0"><strong>The compositor's particle/mode fold shaders</strong> sample raw
+  <em>and never re-encode</em> — output stays <span class="chip gamma">display</span>. The gamma fold
+  works today.</p>
+  <p style="margin:.3rem 0"><strong>The real unit material</strong> samples raw too — but at
+  <code>unit_sprite_body.gdshaderinc:923</code> it ends with
+  <code>ALBEDO = pow(ALBEDO, 2.2)</code>: it decodes to <span class="chip linear">linear</span> "for
+  Forward+." So the shipped unit fragment outputs <em>linear</em>, not display.</p>
+</div>
+
+<p>That final <code>pow</code> is the right thing for the unit's <em>normal</em> job — an opaque unit
+in Pass 1, where the scene is linear (Lessons 2–3). But it is <em>literally the "defect"</em> the
+compositor's comment calls out. So the plan's phrase "the prims emit raw display texels" is:</p>
+<p>• <strong>true today</strong> of the compositor's hand-ported particle fold, and</p>
+<p>• <strong>a target, not yet guaranteed</strong>, for the engine drawing the <em>real</em> unit
+material into the fold — because that material would first have to <em>not</em> run its line-923
+linearization.</p>
+
+<p>This is precisely open question #1 in <code>engine-shaded-display-fold.md</code> §7:
+<em>"Raw-value preservation — PROTOTYPE FIRST. Does the engine's fragment→scratch write preserve raw
+display values…?"</em> You don't need to solve it now — but you can now say <em>exactly</em> why it's
+open, from the two files, instead of taking the plan's word for it. That's the whole point of this
+course.</p>
+
+<h2>6 · Keyed to the passes</h2>
+
+<div class="flow">
+Pass 1  opaque   sample raw index → palette → <span style="color:#1f6f7a">pow(2.2) → LINEAR</span>   (correct: Pass 1 is linear)
+Pass B  fold     sample raw index → palette → <span style="color:#a5591a">NO re-encode → DISPLAY</span>  (so the ADD is a gamma add)
+                 └─ open Q1: make the engine-drawn real material take THIS branch, not the pow one
+</div>
+
+<p>Same raw texel in both. The difference that decides the color space is a single line at the end of
+the fragment. That's "the color space lives in the data," made concrete.</p>
+
+<h2>Check yourself</h2>
+<p>Commit before reading the feedback.</p>
+
+<div class="quiz" data-answer="0">
+  <p class="q">The unit atlas is sampled with no <code>source_color</code> mainly because each texel is:</p>
+  <div class="opts">
+    <button class="opt">a palette index</button>
+    <button class="opt">a linear color</button>
+    <button class="opt">a screen normal</button>
+  </div>
+  <p class="feedback"
+     data-good="Right — it's an index (0–15 → 0–255). sRGB-decoding or blurring an index would corrupt the lookup."
+     data-bad="It's a palette index, not a color. Decoding/filtering an index destroys the lookup — hence raw + filter_nearest."></p>
+</div>
+
+<div class="quiz" data-answer="0">
+  <p class="q">A hardware <code>ADD</code> produces a gamma-space blend precisely when:</p>
+  <div class="opts">
+    <button class="opt">both inputs are gamma</button>
+    <button class="opt">only one is gamma</button>
+    <button class="opt">the blender is gamma</button>
+  </div>
+  <p class="feedback"
+     data-good="Yes — the blender has no color space; it's gamma iff BOTH operands (src and dst scratch) hold gamma numbers."
+     data-bad="The blender itself has no color space. It's a gamma add only when BOTH operands are already gamma numbers."></p>
+</div>
+
+<div class="quiz" data-answer="0">
+  <p class="q">At its final line (923), the shipped unit material outputs color in:</p>
+  <div class="opts">
+    <button class="opt">linear space here</button>
+    <button class="opt">display space here</button>
+    <button class="opt">palette space here</button>
+  </div>
+  <p class="feedback"
+     data-good="Correct — pow(ALBEDO, 2.2) decodes to linear. That's right for Pass 1, but it's the very step the fold must skip."
+     data-bad="Line 923 is pow(ALBEDO, 2.2) → linear. Correct for the opaque pass; it's exactly what the fold would need to suppress."></p>
+</div>
+
+<div class="ask">
+  <strong>Ask me anything.</strong> This is the densest lesson so far — good pulls:
+  <em>"walk me through the palette lookup so I see why the index must be raw,"</em> or
+  <em>"if the fold skips the pow, does the opaque unit in Pass 1 still get its linear output?"</em>
+  (yes — different draw, and we can trace how), or <em>"is <code>pow(x,2.2)</code> decode or encode,
+  and which direction is 'the defect'?"</em>
+</div>
+
+<div class="footer">
+  <p><strong>Primary source:</strong> in-repo and grounded —
+  <code>unit_sprite_body.gdshaderinc:640</code> (raw sampler), <code>:657</code> (indexed atlas),
+  <code>:923</code> (the linearize), and <code>combat_displayspace_composite.glsl:258–262</code> (the
+  display-space fold + "the defect"). External backup on the sRGB transfer function:
+  <a href="https://blog.johnnovak.net/2016/09/21/what-every-coder-should-know-about-gamma/">Novak —
+  "What Every Coder Should Know About Gamma."</a></p>
+
+  <p><strong>Previous:</strong> <a href="0003-filtering-routing.html">Lesson 3 — The filter.</a>
+  &nbsp;·&nbsp; <strong>Next:</strong> the full <em>linear → display → linear → screen</em> journey,
+  pass by pass (handoff Q5) — now that you know what each word means and where the color space lives,
+  we walk the seed (A), fold (B), and copy-out (C) as one bracketed gamma excursion.</p>
+
+  <div class="pill-nav">
+    <a href="0003-filtering-routing.html">← Lesson 3</a>
+    <a href="../engine-shaded-display-fold.md">The plan (5-pass diagram)</a>
+    <a href="../RESOURCES.md">Resources</a>
+    <a href="../GLOSSARY.md">Glossary</a>
+  </div>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
