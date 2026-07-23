@@ -1925,7 +1925,7 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 	render_list[RENDER_LIST_OPAQUE].sort_by_key();
 	render_list[RENDER_LIST_MOTION].sort_by_key();
 	render_list[RENDER_LIST_ALPHA].sort_by_reverse_depth_and_priority();
-	render_list[RENDER_LIST_COMPOSITOR_FOLD].sort_by_priority(); // fold in the CALLER's order (render_priority = OTDepthPrimOrder run index), NOT camera depth; the engine never sorts by depth for the fold
+	render_list[RENDER_LIST_COMPOSITOR_FOLD].sort_by_fold_order(); // fold in the CALLER's order (each run-instance's sorting_offset = OTDepthPrimOrder run index), NOT camera depth; the engine never sorts by depth for the fold. sorting_offset is uncapped (float), unlike the 8-bit render_priority.
 
 	int *render_info = p_render_data->render_info ? p_render_data->render_info->info[RSE::VIEWPORT_RENDER_INFO_TYPE_VISIBLE] : (int *)nullptr;
 	_fill_instance_data(RENDER_LIST_OPAQUE, render_info);
@@ -2473,33 +2473,55 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 	}
 	RD::get_singleton()->draw_command_end_label();
 
-	// Compositor fold: draw materials flagged `render_mode compositor_fold` through their real
-	// forward material pipeline into an isolated scratch buffer, so a CompositorEffect can read
-	// the self-shaded, depth-ordered, clamped result in POST_TRANSPARENT and fold it itself
-	// (instead of re-implementing each material's fragment shader in raw GLSL).
+	// Compositor fold (engine's Pass B — design §7a.1/§7a.2): draw materials flagged
+	// `render_mode compositor_fold` through their real forward material pipeline into a
+	// COMPOSITOR-OWNED display-space scratch, so a CompositorEffect can fold self-shaded,
+	// order-controlled, clamped prims without re-implementing each material's fragment shader in
+	// raw GLSL. The engine's contract here is STATELESS: the compositor allocates + SEEDS the
+	// scratch under `compositor_fold`/`color` in its PRE_TRANSPARENT pass (Pass A: scene color →
+	// display, coverage α=0), the engine draws the flagged prims onto it (LOAD, preserving the
+	// seed), and the compositor resolves it in POST_TRANSPARENT (Pass C). The engine neither
+	// allocates nor clears the buffer — it just folds into the RID it was handed.
 	//
 	// Drawn here — after the transparent resolve, before the POST_TRANSPARENT callback — so the
-	// scratch is ready when the effect runs. The target is a clamping A2B10G10R10_UNORM buffer:
-	// per-material hardware add/sub blend saturates per draw, which is the per-step fold clamp.
-	// Depth-tests against the (resolved) scene depth for correct occlusion; depth is loaded, not
-	// cleared. Both scratch and depth are internal-size + single-sample, so this is independent of
-	// upscaling/MSAA. The scratch is cleared to black each frame (additive accumulation); seeding
-	// it with scene color for subtractive materials is a follow-up.
+	// scratch is ready when Pass C runs. Target is a clamping A2B10G10R10_UNORM buffer: per-material
+	// hardware add/sub/mix blend saturates per draw = the per-step fold clamp; alpha is forced
+	// ADD/ONE/ONE (coverage, §7a.6). Depth-tested against resolved scene depth for occlusion; both
+	// depth and the seeded color are loaded, not cleared.
 	if (compositor_fold_rp_uniform_set.is_valid() && render_list[RENDER_LIST_COMPOSITOR_FOLD].elements.size() > 0) {
 		RID depth_texture = rb->get_depth_texture();
-		if (depth_texture.is_valid()) {
+
+		// Guard-rails (§7a.3, §7a.4): the display-space fold is only correct under a Linear tonemapper,
+		// at native resolution, single-sample. Warn (once) rather than silently corrupting color if the
+		// combat viewport violates a precondition. These are the empirically-grounded FFT-combat defaults.
+		if (is_environment(p_render_data->environment) && environment_get_tone_mapper(p_render_data->environment) != RSE::ENV_TONE_MAPPER_LINEAR) {
+			WARN_PRINT_ONCE("compositor_fold: viewport tonemapper is not Linear. The display-space fold add is only correct under ENV_TONE_MAPPER_LINEAR (§7a.3); ACES/AgX/Reinhard will corrupt the fold.");
+		}
+		if (rb->get_internal_size() != rb->get_target_size()) {
+			WARN_PRINT_ONCE("compositor_fold: internal_size != target_size (3D upscaling active). The fold assumes native resolution (§7a.4) and is undefined otherwise.");
+		}
+		if (rb->get_msaa_3d() != RSE::VIEWPORT_MSAA_DISABLED) {
+			WARN_PRINT_ONCE("compositor_fold: MSAA is enabled. The fold assumes a single-sample scratch (§7a.4).");
+		}
+
+		// The scratch is compositor-owned: it must already exist (Pass A created + seeded it under
+		// `compositor_fold`/`color`). If it doesn't, the compositor didn't run its seed pass — warn and
+		// skip rather than allocating an unseeded buffer the engine can't correctly initialize.
+		if (!rb->has_texture(SNAME("compositor_fold"), SNAME("color"))) {
+			WARN_PRINT_ONCE("compositor_fold: no compositor-owned `compositor_fold`/`color` scratch found. The compositor must allocate + seed it in a PRE_TRANSPARENT pass (design §7a.2) before the engine can fold into it. Skipping fold this frame.");
+		} else if (depth_texture.is_valid()) {
 			RENDER_TIMESTAMP("Compositor Fold");
 			RD::get_singleton()->draw_command_begin_label("Compositor Fold pass");
 
-			// Isolated scratch a CompositorEffect reads via get_texture("compositor_fold", "color").
-			RID fold_texture = rb->create_texture(SNAME("compositor_fold"), SNAME("color"), RD::DATA_FORMAT_A2B10G10R10_UNORM_PACK32, RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT | RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_STORAGE_BIT | RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT, RD::TEXTURE_SAMPLES_1, rb->get_internal_size(), rb->get_view_count());
+			// Compositor-supplied scratch (allocated + seeded by Pass A). The engine folds into it.
+			RID fold_texture = rb->get_texture(SNAME("compositor_fold"), SNAME("color"));
 
 			RID fold_framebuffer = FramebufferCacheRD::get_singleton()->get_cache_multiview(rb->get_view_count(), fold_texture, depth_texture);
 
 			uint32_t fold_color_pass_flags = (color_pass_flags | uint32_t(COLOR_PASS_FLAG_TRANSPARENT)) & ~uint32_t(COLOR_PASS_FLAG_SEPARATE_SPECULAR) & ~uint32_t(COLOR_PASS_FLAG_MOTION_VECTORS);
 			RenderListParameters render_list_params(render_list[RENDER_LIST_COMPOSITOR_FOLD].elements.ptr(), render_list[RENDER_LIST_COMPOSITOR_FOLD].element_info.ptr(), render_list[RENDER_LIST_COMPOSITOR_FOLD].elements.size(), reverse_cull, PASS_MODE_COLOR, fold_color_pass_flags, rb_data.is_null(), p_render_data->directional_light_soft_shadows, compositor_fold_rp_uniform_set, get_debug_draw_mode() == RSE::VIEWPORT_DEBUG_DRAW_WIREFRAME, Vector2(), p_render_data->scene_data->lod_distance_multiplier, p_render_data->scene_data->screen_mesh_lod_threshold, p_render_data->scene_data->view_count, 0, base_specialization);
-			// Clear the scratch color to transparent black; load (preserve) the shared scene depth.
-			_render_list_with_draw_list(&render_list_params, fold_framebuffer, RD::DRAW_CLEAR_COLOR_0, { Color(0, 0, 0, 0) }, 0.0f, 0u, p_render_data->render_region);
+			// LOAD (preserve) both the compositor's seeded scratch color and the shared scene depth — do NOT clear.
+			_render_list_with_draw_list(&render_list_params, fold_framebuffer, RD::DRAW_DEFAULT_ALL, Vector<Color>(), 0.0f, 0u, p_render_data->render_region);
 
 			RD::get_singleton()->draw_command_end_label();
 		}

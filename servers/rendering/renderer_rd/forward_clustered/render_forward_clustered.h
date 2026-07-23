@@ -732,15 +732,15 @@ private:
 			sorter.sort(elements.ptr(), elements.size());
 		}
 
-		struct SortByPriority { //used for compositor fold — caller-supplied fold order via render_priority, NO depth term
+		struct SortByFoldOrder { //used for compositor fold — caller-supplied fold order via the instance's sorting_offset, NO depth term
 			_FORCE_INLINE_ bool operator()(const GeometryInstanceSurfaceDataCache *A, const GeometryInstanceSurfaceDataCache *B) const {
-				return (A->sort.priority < B->sort.priority);
+				return (A->owner->sorting_offset < B->owner->sorting_offset);
 			}
 		};
 
-		void sort_by_priority() { //used for compositor fold: the game stamps render_priority = its OTDepthPrimOrder run index, so the engine folds runs in the caller's order without ever sorting by camera depth. (Within a run, MultiMesh instance-buffer position carries order.)
+		void sort_by_fold_order() { //used for compositor fold: the game stamps each run-instance's sorting_offset = its OTDepthPrimOrder run index, so the engine folds runs in the caller's order without ever sorting by camera depth. sorting_offset is a per-instance float (set via GeometryInstance3D.sorting_offset / instance_set_pivot_data) — UNCAPPED, unlike the 8-bit material render_priority. Within a run, MultiMesh instance-buffer position carries intra-run order.
 
-			SortArray<GeometryInstanceSurfaceDataCache *, SortByPriority> sorter;
+			SortArray<GeometryInstanceSurfaceDataCache *, SortByFoldOrder> sorter;
 			sorter.sort(elements.ptr(), elements.size());
 		}
 

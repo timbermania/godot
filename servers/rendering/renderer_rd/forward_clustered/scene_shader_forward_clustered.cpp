@@ -347,6 +347,19 @@ void SceneShaderForwardClustered::ShaderData::_create_pipeline(PipelineKey p_pip
 
 	// Color pass -> attachment 0: Color/Diffuse, attachment 1: Separate Specular, attachment 2: Motion Vectors
 	RD::PipelineColorBlendState::Attachment blend_attachment = blend_mode_to_blend_attachment(BlendMode(blend_mode));
+	if (compositor_fold) {
+		// Coverage-alpha override (design §7a.6). The fold's alpha channel is a "touched" mask that
+		// Pass C tests to keep the 3D background pristine (discard coverage==0). It must ACCUMULATE
+		// coverage regardless of how the material blends COLOR: a `blend_sub` prim subtracts color but
+		// still touches the pixel, so its alpha must ADD, not REVERSE_SUBTRACT (which would drive a
+		// sub-touched pixel to alpha 0 and falsely discard it). Vulkan blends color and alpha with
+		// independent ops/factors, so we force alpha = dst + src*ONE here while leaving the material's
+		// color blend (add/sub/mix) untouched. This decouples coverage from the color blend mode and
+		// keeps Pass C unchanged (no stencil touched-mask needed).
+		blend_attachment.alpha_blend_op = RD::BLEND_OP_ADD;
+		blend_attachment.src_alpha_blend_factor = RD::BLEND_FACTOR_ONE;
+		blend_attachment.dst_alpha_blend_factor = RD::BLEND_FACTOR_ONE;
+	}
 	RD::PipelineColorBlendState blend_state_color_blend;
 	blend_state_color_blend.attachments = { blend_attachment, RD::PipelineColorBlendState::Attachment(), RD::PipelineColorBlendState::Attachment() };
 	RD::PipelineColorBlendState blend_state_color_opaque = RD::PipelineColorBlendState::create_disabled(3);
