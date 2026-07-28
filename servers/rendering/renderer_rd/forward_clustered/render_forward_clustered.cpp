@@ -2516,6 +2516,21 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 			// Compositor-supplied scratch (allocated + seeded by Pass A). The engine folds into it.
 			RID fold_texture = rb->get_texture(SNAME("compositor_fold"), SNAME("color"));
 
+			// Validate the handed scratch matches what the fold contract assumes (design §7a.2/§7a.4): a
+			// clamping A2B10G10R10_UNORM buffer at native resolution. A wrong format/size otherwise silently
+			// builds a mismatched framebuffer (or a non-UNORM target that doesn't clamp), corrupting the fold.
+			// Non-fatal — warn once and still attempt the fold, consistent with the other guard-rails above.
+			{
+				RD::TextureFormat fold_format = RD::get_singleton()->texture_get_format(fold_texture);
+				if (fold_format.format != RD::DATA_FORMAT_A2B10G10R10_UNORM_PACK32) {
+					WARN_PRINT_ONCE("compositor_fold: the compositor-owned `compositor_fold`/`color` scratch is not A2B10G10R10_UNORM_PACK32. The per-step fold clamp relies on UNORM saturation (§7a); another format will not clamp correctly.");
+				}
+				Size2i fold_internal_size = rb->get_internal_size();
+				if (fold_format.width != (uint32_t)fold_internal_size.x || fold_format.height != (uint32_t)fold_internal_size.y) {
+					WARN_PRINT_ONCE("compositor_fold: the compositor-owned scratch size does not match the render buffer internal size. The fold assumes a native-resolution scratch (§7a.4); a mismatch will misregister the fold.");
+				}
+			}
+
 			RID fold_framebuffer = FramebufferCacheRD::get_singleton()->get_cache_multiview(rb->get_view_count(), fold_texture, depth_texture);
 
 			uint32_t fold_color_pass_flags = (color_pass_flags | uint32_t(COLOR_PASS_FLAG_TRANSPARENT)) & ~uint32_t(COLOR_PASS_FLAG_SEPARATE_SPECULAR) & ~uint32_t(COLOR_PASS_FLAG_MOTION_VECTORS);

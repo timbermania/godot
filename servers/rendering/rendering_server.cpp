@@ -2092,6 +2092,13 @@ String RenderingServer::get_current_rendering_method() const {
 	return ::OS::get_singleton()->get_current_rendering_method();
 }
 
+bool RenderingServer::is_compositor_fold_supported() const {
+	// The compositor-fold Pass B (RENDER_LIST_COMPOSITOR_FOLD) is implemented only in the Forward+
+	// (clustered) renderer; Mobile ignores the render_mode (and warns). Gate on the active method rather
+	// than a version number so consumers detect the capability directly.
+	return get_current_rendering_method() == "forward_plus";
+}
+
 Vector<uint8_t> _convert_surface_version_1_to_surface_version_2(uint64_t p_format, Vector<uint8_t> p_vertex_data, uint32_t p_vertex_count, uint32_t p_old_stride, uint32_t p_vertex_size, uint32_t p_normal_size, uint32_t p_position_stride, uint32_t p_normal_tangent_stride) {
 	Vector<uint8_t> new_vertex_data;
 	new_vertex_data.resize(p_vertex_data.size());
@@ -3523,6 +3530,7 @@ void RenderingServer::_bind_methods() {
 
 	ClassDB::bind_method(D_METHOD("get_current_rendering_driver_name"), &RenderingServer::get_current_rendering_driver_name);
 	ClassDB::bind_method(D_METHOD("get_current_rendering_method"), &RenderingServer::get_current_rendering_method);
+	ClassDB::bind_method(D_METHOD("is_compositor_fold_supported"), &RenderingServer::is_compositor_fold_supported);
 
 	ClassDB::bind_method(D_METHOD("make_sphere_mesh", "latitudes", "longitudes", "radius"), &RenderingServer::make_sphere_mesh);
 	ClassDB::bind_method(D_METHOD("get_test_cube"), &RenderingServer::get_test_cube);

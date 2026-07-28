@@ -285,7 +285,7 @@ The engine change is complete on branch `spike/compositor-consume-material-outpu
 It is a **thin** patch: the engine only draws the flagged prims into a compositor-owned scratch. Passes A and C
 stay in userland. Four pieces, each verified on hardware via `/tmp/spike-fold/proj` (RTX 5090 / Vulkan 1.4 / Forward+).
 
-**Engine diff (all in `renderer_rd/forward_clustered/`, plus one in `renderer_rd/storage_rd/`):**
+**Engine diff (all in `renderer_rd/forward_clustered/`, plus the `compositor_fold` render_mode registration in `servers/rendering/shader_types.cpp`):**
 
 1. **Coverage-α override** (`scene_shader_forward_clustered.cpp::_create_pipeline`). When a ShaderData's
    `compositor_fold` flag is set, the color-blend attachment's **alpha** fields are forced to

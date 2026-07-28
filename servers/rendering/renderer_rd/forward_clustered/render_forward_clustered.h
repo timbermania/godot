@@ -732,16 +732,41 @@ private:
 			sorter.sort(elements.ptr(), elements.size());
 		}
 
-		struct SortByFoldOrder { //used for compositor fold — caller-supplied fold order via the instance's sorting_offset, NO depth term
-			_FORCE_INLINE_ bool operator()(const GeometryInstanceSurfaceDataCache *A, const GeometryInstanceSurfaceDataCache *B) const {
-				return (A->owner->sorting_offset < B->owner->sorting_offset);
+		struct SortByFoldOrder { //used for compositor fold — STABLE order of an index permutation by the caller-supplied fold order (owner->sorting_offset), NO depth term. On ties (equal sorting_offset) it falls back to the submission index, so equal-offset prims keep the order they were added in — not the arbitrary order an unstable introsort would give.
+			GeometryInstanceSurfaceDataCache **elems = nullptr;
+			_FORCE_INLINE_ bool operator()(uint32_t A, uint32_t B) const {
+				const float oa = elems[A]->owner->sorting_offset;
+				const float ob = elems[B]->owner->sorting_offset;
+				return (oa == ob) ? (A < B) : (oa < ob);
 			}
 		};
 
 		void sort_by_fold_order() { //used for compositor fold: the game stamps each run-instance's sorting_offset = its OTDepthPrimOrder run index, so the engine folds runs in the caller's order without ever sorting by camera depth. sorting_offset is a per-instance float (set via GeometryInstance3D.sorting_offset / instance_set_pivot_data) — UNCAPPED, unlike the 8-bit material render_priority. Within a run, MultiMesh instance-buffer position carries intra-run order.
-
-			SortArray<GeometryInstanceSurfaceDataCache *, SortByFoldOrder> sorter;
-			sorter.sort(elements.ptr(), elements.size());
+			// The sort is STABLE on equal sorting_offset: the real consumer stamps a bare integer depth bucket
+			// on some prims (e.g. callbacks) with no per-run epsilon, so those tie — and must fold in a
+			// deterministic (submission) order, not the introsort-arbitrary one SortArray gives on raw pointers.
+			// SortArray is introsort (unstable), so we stably sort an INDEX permutation (offset, then index)
+			// and apply it, instead of sorting the pointer array directly.
+			const uint32_t size = elements.size();
+			if (size < 2) {
+				return;
+			}
+			LocalVector<uint32_t> order;
+			order.resize(size);
+			for (uint32_t i = 0; i < size; i++) {
+				order[i] = i;
+			}
+			SortArray<uint32_t, SortByFoldOrder> sorter;
+			sorter.compare.elems = elements.ptr();
+			sorter.sort(order.ptr(), size);
+			LocalVector<GeometryInstanceSurfaceDataCache *> sorted;
+			sorted.resize(size);
+			for (uint32_t i = 0; i < size; i++) {
+				sorted[i] = elements[order[i]];
+			}
+			for (uint32_t i = 0; i < size; i++) {
+				elements[i] = sorted[i];
+			}
 		}
 
 		_FORCE_INLINE_ void add_element(GeometryInstanceSurfaceDataCache *p_element) {

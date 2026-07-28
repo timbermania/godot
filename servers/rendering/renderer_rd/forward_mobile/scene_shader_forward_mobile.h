@@ -259,6 +259,7 @@ public:
 		bool uses_normal_map = false;
 		bool uses_bent_normal_map = false;
 		bool wireframe = false;
+		bool compositor_fold = false; // Forward+-only; on Mobile it is inert and only drives a WARN (no fold pass exists here)
 
 		bool unshaded = false;
 		bool uses_vertex = false;

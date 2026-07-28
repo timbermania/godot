@@ -74,6 +74,7 @@ void SceneShaderForwardMobile::ShaderData::set_code(const String &p_code) {
 	uses_normal_map = false;
 	uses_bent_normal_map = false;
 	wireframe = false;
+	compositor_fold = false;
 
 	unshaded = false;
 	uses_vertex = false;
@@ -119,6 +120,11 @@ void SceneShaderForwardMobile::ShaderData::set_code(const String &p_code) {
 
 	actions.render_mode_flags["unshaded"] = &unshaded;
 	actions.render_mode_flags["wireframe"] = &wireframe;
+	// `compositor_fold` is registered globally in shader_types (so it parses on every renderer), but the
+	// fold pass that consumes it exists only in Forward+ (clustered). Bind the flag here purely so Mobile
+	// can DETECT and warn about it below — Mobile has no fold pass, so a flagged material would otherwise
+	// silently fall into the normal linear transparent pass and blend incorrectly (see the WARN below).
+	actions.render_mode_flags["compositor_fold"] = &compositor_fold;
 	actions.render_mode_flags["particle_trails"] = &uses_particle_trails;
 	actions.render_mode_flags["world_vertex_coords"] = &uses_world_coordinates;
 
@@ -182,6 +188,14 @@ void SceneShaderForwardMobile::ShaderData::set_code(const String &p_code) {
 
 	if (version.is_null()) {
 		version = SceneShaderForwardMobile::singleton->shader.version_create(false);
+	}
+
+	if (compositor_fold) {
+		// The compositor-fold pass (RENDER_LIST_COMPOSITOR_FOLD) only exists in the Forward+ (clustered)
+		// renderer. On Mobile there is no fold list, so this flag is inert and the material renders through
+		// the normal transparent pass — which blends in linear (÷ luminance_multiplier) and will NOT
+		// reproduce the display-space fold. Warn loudly rather than silently producing wrong output.
+		WARN_PRINT_ONCE("compositor_fold render_mode is only supported on the Forward+ renderer; it is ignored on Mobile. The flagged material will fall back to the normal transparent pass and will NOT fold correctly.");
 	}
 
 	depth_draw = DepthDraw(depth_drawi);

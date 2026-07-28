@@ -1046,6 +1046,13 @@ public:
 	String get_current_rendering_driver_name() const;
 	String get_current_rendering_method() const;
 
+	// True iff the current renderer implements the `compositor_fold` render_mode (the engine's Pass B that
+	// draws flagged transparents into a compositor-owned scratch). Only Forward+ (clustered) does. The
+	// method's mere PRESENCE also signals a fork that has the feature at all: on stock Godot the method
+	// does not exist, so a consumer can gate with `has_method("is_compositor_fold_supported")` before
+	// calling it, instead of proxying support through an engine-version check.
+	bool is_compositor_fold_supported() const;
+
 #ifdef TOOLS_ENABLED
 	virtual void get_argument_options(const StringName &p_function, int p_idx, List<String> *r_options) const override;
 #endif
