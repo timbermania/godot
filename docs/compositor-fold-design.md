@@ -222,6 +222,12 @@ engine limitation, WARN'd at `:1315`) → guard the fold there. **Mobile does no
 
 ## 7. The one open decision — occlusion
 
+> **Resolved (2026-07-29).** Pass B as built takes the **hardware depth-attachment test** (the right column
+> below): the fold binds resolved scene depth as a depth attachment and depth-*tests* against it, with
+> depth-*write* forced off so it can never corrupt the scene (see `engine-shaded-display-fold.md` §7b and §10
+> item 5). The manual-linear / one-OT variant was not built. The table below is kept for decision history; the
+> code and §10 are authoritative.
+
 | | Manual-linear (recommended for fidelity) | Hardware test (less engine work) |
 |---|---|---|
 | Occlusion | shader samples scene depth, **reverses to linear**, compares vs prim linear Z, `discard` | shader writes biased `DEPTH` via shared `.gdshaderinc`; hardware z-test |

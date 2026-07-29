@@ -130,7 +130,11 @@ void RenderSceneBuffersRD::cleanup() {
 		E.value->free_data();
 	}
 
-	// Clear our named textures
+	// Clear our named textures. Note: this frees ALL named textures with no scope filter, including
+	// compositor-owned scoped entries such as RB_SCOPE_COMPOSITOR_FOLD. configure() calls cleanup() on
+	// every reconfigure (resize / MSAA / scaling change), so a compositor that hands the engine a scratch
+	// under such a scope MUST recreate it every frame (the compositor_fold contract seeds it in a
+	// per-frame Pass A) and must not cache the RID across frames, or it will dangle after the next resize.
 	for (KeyValue<NTKey, NamedTexture> &E : named_textures) {
 		free_named_texture(E.value);
 	}

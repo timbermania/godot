@@ -281,9 +281,9 @@ engine-facts to read and empirical probes to run. This section is the source of 
 
 ## 10. Pass B — built + verified (2026-07-23)
 
-The engine change is complete on branch `spike/compositor-consume-material-output` (working tree, **uncommitted**).
+The engine change is complete on branch `spike/compositor-consume-material-output` (committed on this branch).
 It is a **thin** patch: the engine only draws the flagged prims into a compositor-owned scratch. Passes A and C
-stay in userland. Four pieces, each verified on hardware via `/tmp/spike-fold/proj` (RTX 5090 / Vulkan 1.4 / Forward+).
+stay in userland. The original four pieces (items 1-4) were each verified on hardware via `/tmp/spike-fold/proj` (RTX 5090 / Vulkan 1.4 / Forward+). A later hardening pass (item 3's sort extraction + NaN guard, and items 5-8 below) was verified by the full engine unit-test suite (`test_fold_order_sort.cpp` + no regressions across 1422 cases) and a windowed run of the paired consumer project.
 
 **Engine diff (all in `renderer_rd/forward_clustered/`, plus the `compositor_fold` render_mode registration in `servers/rendering/shader_types.cpp`):**
 
@@ -298,7 +298,7 @@ stay in userland. Four pieces, each verified on hardware via `/tmp/spike-fold/pr
    draws with **`DRAW_DEFAULT_ALL` (LOAD — preserves the seed)**. If the texture is absent, it warns and skips
    (the compositor must own it). *Verify:* `seed_only` → **0.20** (seed survives untouched); `seed_add` →
    **0.50** = seed 0.2 + fold 0.3 (LOAD, not clear — a clear would read 0.30).
-3. **Uncapped order** (`render_forward_clustered.h` `SortByFoldOrder`/`sort_by_fold_order()` + call site). Fold
+3. **Uncapped order** (`render_forward_clustered.h` `sort_by_fold_order()` + call site; the comparator and stable index-permutation are extracted to `fold_order_sort.h`, NaN-robust and unit-tested in `tests/servers/rendering/test_fold_order_sort.cpp`). Fold
    list sorts by `owner->sorting_offset` (per-instance float, uncapped), replacing the 8-bit `render_priority`
    sort. See §7a.5 decision note. *Verify:* `uncapped_order` (300 runs, sub at offset 299 folds last) → **0.2845**.
 4. **Guard-rail asserts** (fold-pass block). `WARN_PRINT_ONCE` if the viewport tonemapper ≠
@@ -306,6 +306,26 @@ stay in userland. Four pieces, each verified on hardware via `/tmp/spike-fold/pr
    (§7a.4). Non-fatal — the fold still runs. *Verify:* `guardrail_agx` (forces AgX) prints the tonemapper
    warning and still folds (0.3998). The size/MSAA guards share the same pattern (positive-triggering them needs
    a scaled/MSAA `SubViewport`, not scaffolded).
+5. **Scratch-compatibility guard-rails** (fold-pass block). Before folding, the engine validates the
+   compositor-owned scratch: **format** ≠ `A2B10G10R10_UNORM_PACK32` warns and *continues* (a non-UNORM target
+   won't clamp, but the framebuffer is still valid); **size** ≠ `internal_size` or **`array_layers`** ≠ the
+   render buffer's `view_count` warn and *skip* the fold this frame, because `framebuffer_create` hard-fails on
+   mismatched attachments (a null framebuffer would otherwise spam per-frame RD errors). The absent-scratch case
+   (item 2) also skips.
+6. **Depth-write force-off** (`scene_shader_forward_clustered.cpp::_create_pipeline`). When `compositor_fold` is
+   set, `enable_depth_write` is forced **false**. The fold depth-*tests* against resolved opaque depth for
+   occlusion (§7b) but must never *write* depth (the fold pass runs after the transparent resolve; a write would
+   corrupt the 3D scene for POST_TRANSPARENT effects). Makes the "never corrupts depth" invariant hold even if a
+   fold material forgets `render_mode depth_draw_never`.
+7. **Capability query** (`RenderingServer::is_compositor_fold_supported()`, bound to scripting). Reports whether
+   this build has the fork's Pass B; a consumer gates with `has_method("is_compositor_fold_supported")` (absent
+   on stock Godot) before relying on the fold. A fork convenience beyond the original §5 boundary, recorded as an
+   intentional deliverable.
+8. **Mobile / GLES3 detect-and-warn.** `compositor_fold` registers globally (`shader_types.cpp`) so it parses on
+   every renderer, but Pass B is **Forward+ only** (§4). The Mobile shader binds the flag solely to
+   `WARN_PRINT_ONCE` that the fold is unavailable there — it can never half-activate a nonexistent path. The
+   `gl_compatibility` (GLES3) renderer is **out of scope**: the fold is RD-only by construction, and a flagged
+   material there is silently ignored (no fold, no warn).
 
 **Spike harness now models the real architecture** (`/tmp/spike-fold/proj`): a `fold_seed.gd` CompositorEffect
 plays **Pass A** — at PRE_TRANSPARENT it `create_texture`s the `compositor_fold`/`color` scratch (idempotent by

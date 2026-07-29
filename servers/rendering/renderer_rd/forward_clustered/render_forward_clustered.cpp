@@ -955,6 +955,9 @@ void RenderForwardClustered::_fill_render_list(RenderListType p_render_list, con
 	for (int i = 0; i < (int)p_render_data->instances->size(); i++) {
 		GeometryInstanceForwardClustered *inst = static_cast<GeometryInstanceForwardClustered *>((*p_render_data->instances)[i]);
 
+		// Note: sorting_offset is subtracted from inst->depth below to bias depth-sorting. Prims routed to
+		// RENDER_LIST_COMPOSITOR_FOLD repurpose sorting_offset as the fold-order key (run index); that list is
+		// ordered by sort_by_fold_order() and never by depth, so this perturbation of inst->depth is inert there.
 		Vector3 center = inst->transform.origin;
 		if (p_render_data->scene_data->cam_orthogonal) {
 			if (inst->use_aabb_center) {
@@ -2510,35 +2513,44 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 		if (!rb->has_texture(RB_SCOPE_COMPOSITOR_FOLD, RB_TEX_COLOR)) {
 			WARN_PRINT_ONCE("compositor_fold: no compositor-owned `compositor_fold`/`color` scratch found. The compositor must allocate + seed it in a PRE_TRANSPARENT pass (design §7a.2) before the engine can fold into it. Skipping fold this frame.");
 		} else if (depth_texture.is_valid()) {
-			RENDER_TIMESTAMP("Compositor Fold");
-			RD::get_singleton()->draw_command_begin_label("Compositor Fold pass");
-
 			// Compositor-supplied scratch (allocated + seeded by Pass A). The engine folds into it.
 			RID fold_texture = rb->get_texture(RB_SCOPE_COMPOSITOR_FOLD, RB_TEX_COLOR);
 
-			// Validate the handed scratch matches what the fold contract assumes (design §7a.2/§7a.4): a
-			// clamping A2B10G10R10_UNORM buffer at native resolution. A wrong format/size otherwise silently
-			// builds a mismatched framebuffer (or a non-UNORM target that doesn't clamp), corrupting the fold.
-			// Non-fatal — warn once and still attempt the fold, consistent with the other guard-rails above.
-			{
-				RD::TextureFormat fold_format = RD::get_singleton()->texture_get_format(fold_texture);
-				if (fold_format.format != RD::DATA_FORMAT_A2B10G10R10_UNORM_PACK32) {
-					WARN_PRINT_ONCE("compositor_fold: the compositor-owned `compositor_fold`/`color` scratch is not A2B10G10R10_UNORM_PACK32. The per-step fold clamp relies on UNORM saturation (§7a); another format will not clamp correctly.");
-				}
-				Size2i fold_internal_size = rb->get_internal_size();
-				if (fold_format.width != (uint32_t)fold_internal_size.x || fold_format.height != (uint32_t)fold_internal_size.y) {
-					WARN_PRINT_ONCE("compositor_fold: the compositor-owned scratch size does not match the render buffer internal size. The fold assumes a native-resolution scratch (§7a.4); a mismatch will misregister the fold.");
-				}
+			// Validate the handed scratch matches what the fold contract assumes (design 7a.2/7a.4): a
+			// clamping A2B10G10R10_UNORM buffer at native resolution, with one layer per view. A wrong
+			// FORMAT still builds a valid framebuffer (it just will not clamp UNORM-style), so warn and
+			// still fold. A wrong SIZE or LAYER count, however, makes framebuffer_create hard-fail on
+			// mismatched attachments (a null framebuffer + per-frame RD error spam rather than a fold), so
+			// for those we warn and SKIP the fold this frame, matching the missing-scratch case above.
+			RD::TextureFormat fold_format = RD::get_singleton()->texture_get_format(fold_texture);
+			if (fold_format.format != RD::DATA_FORMAT_A2B10G10R10_UNORM_PACK32) {
+				WARN_PRINT_ONCE("compositor_fold: the compositor-owned `compositor_fold`/`color` scratch is not A2B10G10R10_UNORM_PACK32. The per-step fold clamp relies on UNORM saturation; another format will not clamp correctly.");
+			}
+			const Size2i fold_internal_size = rb->get_internal_size();
+			const uint32_t fold_view_count = rb->get_view_count();
+			bool fold_scratch_drawable = true;
+			if (fold_format.width != (uint32_t)fold_internal_size.x || fold_format.height != (uint32_t)fold_internal_size.y) {
+				WARN_PRINT_ONCE("compositor_fold: the compositor-owned scratch size does not match the render buffer internal size (a native-resolution scratch is required). Framebuffer creation would fail, so skipping the fold this frame.");
+				fold_scratch_drawable = false;
+			}
+			if (fold_format.array_layers != fold_view_count) {
+				WARN_PRINT_ONCE("compositor_fold: the compositor-owned scratch layer count does not match the render buffer view count (multiview needs one scratch layer per view). Framebuffer creation would fail, so skipping the fold this frame.");
+				fold_scratch_drawable = false;
 			}
 
-			RID fold_framebuffer = FramebufferCacheRD::get_singleton()->get_cache_multiview(rb->get_view_count(), fold_texture, depth_texture);
+			if (fold_scratch_drawable) {
+				RENDER_TIMESTAMP("Compositor Fold");
+				RD::get_singleton()->draw_command_begin_label("Compositor Fold pass");
 
-			uint32_t fold_color_pass_flags = (color_pass_flags | uint32_t(COLOR_PASS_FLAG_TRANSPARENT)) & ~uint32_t(COLOR_PASS_FLAG_SEPARATE_SPECULAR) & ~uint32_t(COLOR_PASS_FLAG_MOTION_VECTORS);
-			RenderListParameters render_list_params(render_list[RENDER_LIST_COMPOSITOR_FOLD].elements.ptr(), render_list[RENDER_LIST_COMPOSITOR_FOLD].element_info.ptr(), render_list[RENDER_LIST_COMPOSITOR_FOLD].elements.size(), reverse_cull, PASS_MODE_COLOR, fold_color_pass_flags, rb_data.is_null(), p_render_data->directional_light_soft_shadows, compositor_fold_rp_uniform_set, get_debug_draw_mode() == RSE::VIEWPORT_DEBUG_DRAW_WIREFRAME, Vector2(), p_render_data->scene_data->lod_distance_multiplier, p_render_data->scene_data->screen_mesh_lod_threshold, p_render_data->scene_data->view_count, 0, base_specialization);
-			// LOAD (preserve) both the compositor's seeded scratch color and the shared scene depth — do NOT clear.
-			_render_list_with_draw_list(&render_list_params, fold_framebuffer, RD::DRAW_DEFAULT_ALL, Vector<Color>(), 0.0f, 0u, p_render_data->render_region);
+				RID fold_framebuffer = FramebufferCacheRD::get_singleton()->get_cache_multiview(fold_view_count, fold_texture, depth_texture);
 
-			RD::get_singleton()->draw_command_end_label();
+				uint32_t fold_color_pass_flags = (color_pass_flags | uint32_t(COLOR_PASS_FLAG_TRANSPARENT)) & ~uint32_t(COLOR_PASS_FLAG_SEPARATE_SPECULAR) & ~uint32_t(COLOR_PASS_FLAG_MOTION_VECTORS);
+				RenderListParameters render_list_params(render_list[RENDER_LIST_COMPOSITOR_FOLD].elements.ptr(), render_list[RENDER_LIST_COMPOSITOR_FOLD].element_info.ptr(), render_list[RENDER_LIST_COMPOSITOR_FOLD].elements.size(), reverse_cull, PASS_MODE_COLOR, fold_color_pass_flags, rb_data.is_null(), p_render_data->directional_light_soft_shadows, compositor_fold_rp_uniform_set, get_debug_draw_mode() == RSE::VIEWPORT_DEBUG_DRAW_WIREFRAME, Vector2(), p_render_data->scene_data->lod_distance_multiplier, p_render_data->scene_data->screen_mesh_lod_threshold, p_render_data->scene_data->view_count, 0, base_specialization);
+				// LOAD (preserve) both the compositor's seeded scratch color and the shared scene depth (do NOT clear).
+				_render_list_with_draw_list(&render_list_params, fold_framebuffer, RD::DRAW_DEFAULT_ALL, Vector<Color>(), 0.0f, 0u, p_render_data->render_region);
+
+				RD::get_singleton()->draw_command_end_label();
+			}
 		}
 	}
 

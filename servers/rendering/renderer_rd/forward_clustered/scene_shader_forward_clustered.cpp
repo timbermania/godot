@@ -348,9 +348,13 @@ void SceneShaderForwardClustered::ShaderData::_create_pipeline(PipelineKey p_pip
 	// Color pass -> attachment 0: Color/Diffuse, attachment 1: Separate Specular, attachment 2: Motion Vectors
 	RD::PipelineColorBlendState::Attachment blend_attachment = blend_mode_to_blend_attachment(BlendMode(blend_mode));
 	if (compositor_fold) {
-		// Coverage-alpha override (design §7a.6). The fold's alpha channel is a "touched" mask that
-		// Pass C tests to keep the 3D background pristine (discard coverage==0). It must ACCUMULATE
-		// coverage regardless of how the material blends COLOR: a `blend_sub` prim subtracts color but
+		// Coverage-alpha override (design §7a.6). The fold's alpha channel is a coverage signal Pass C
+		// tests to keep the 3D background pristine (discard coverage ~= 0). It ACCUMULATES the material's
+		// own fragment alpha (alpha = dst + src*ONE) — it is NOT a hardware-set binary flag, so a fold
+		// material is expected to output alpha near 1.0 at every pixel it means to fold: the scratch is
+		// A2B10G10R10_UNORM, whose 2-bit alpha quantizes to {0, 1/3, 2/3, 1}, so a single sub-1/6 write
+		// rounds to 0 and would fall under Pass C's discard threshold. Accumulating (rather than gating on
+		// a "touched" bit) is what lets it stay blend-mode-agnostic: a `blend_sub` prim subtracts color but
 		// still touches the pixel, so its alpha must ADD, not REVERSE_SUBTRACT (which would drive a
 		// sub-touched pixel to alpha 0 and falsely discard it). Vulkan blends color and alpha with
 		// independent ops/factors, so we force alpha = dst + src*ONE here while leaving the material's
@@ -376,6 +380,15 @@ void SceneShaderForwardClustered::ShaderData::_create_pipeline(PipelineKey p_pip
 		if (depth_test == DEPTH_TEST_ENABLED_INVERTED) {
 			depth_stencil_state.depth_compare_operator = RD::COMPARE_OP_LESS;
 		}
+	}
+
+	if (compositor_fold) {
+		// The fold depth-tests against the resolved opaque scene depth for occlusion but must NEVER
+		// write to it: the fold pass runs after the transparent resolve, so writing depth would corrupt
+		// the 3D scene for POST_TRANSPARENT effects. Force depth-write off unconditionally so the
+		// "never corrupts the depth buffer" occlusion invariant (design §7b) holds even if a fold
+		// material forgets `render_mode depth_draw_never`.
+		depth_stencil_state.enable_depth_write = false;
 	}
 
 	bool use_stencil = stencil_enabled && p_pipeline_key.version == PIPELINE_VERSION_COLOR_PASS;
