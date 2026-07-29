@@ -2507,14 +2507,14 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 		// The scratch is compositor-owned: it must already exist (Pass A created + seeded it under
 		// `compositor_fold`/`color`). If it doesn't, the compositor didn't run its seed pass — warn and
 		// skip rather than allocating an unseeded buffer the engine can't correctly initialize.
-		if (!rb->has_texture(SNAME("compositor_fold"), SNAME("color"))) {
+		if (!rb->has_texture(RB_SCOPE_COMPOSITOR_FOLD, RB_TEX_COLOR)) {
 			WARN_PRINT_ONCE("compositor_fold: no compositor-owned `compositor_fold`/`color` scratch found. The compositor must allocate + seed it in a PRE_TRANSPARENT pass (design §7a.2) before the engine can fold into it. Skipping fold this frame.");
 		} else if (depth_texture.is_valid()) {
 			RENDER_TIMESTAMP("Compositor Fold");
 			RD::get_singleton()->draw_command_begin_label("Compositor Fold pass");
 
 			// Compositor-supplied scratch (allocated + seeded by Pass A). The engine folds into it.
-			RID fold_texture = rb->get_texture(SNAME("compositor_fold"), SNAME("color"));
+			RID fold_texture = rb->get_texture(RB_SCOPE_COMPOSITOR_FOLD, RB_TEX_COLOR);
 
 			// Validate the handed scratch matches what the fold contract assumes (design §7a.2/§7a.4): a
 			// clamping A2B10G10R10_UNORM buffer at native resolution. A wrong format/size otherwise silently

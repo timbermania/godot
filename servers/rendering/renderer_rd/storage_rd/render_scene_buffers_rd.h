@@ -43,6 +43,12 @@
 
 #define RB_SCOPE_BUFFERS SNAME("render_buffers")
 #define RB_SCOPE_VRS SNAME("VRS")
+// Cross-repo contract: the compositor-owned `compositor_fold`/`color` scratch (design §7a.2). The
+// engine folds into it under this scope + RB_TEX_COLOR; the paired userland CompositorEffect
+// (fft-monorepo-compositor: FoldSurface.gd Pass A/C) MUST create_texture()/get_texture() with the
+// byte-identical scope+subname or the handshake silently no-ops. Keep this the single engine-side
+// source of truth for the scope string; do not re-inline the literal.
+#define RB_SCOPE_COMPOSITOR_FOLD SNAME("compositor_fold")
 
 #define RB_TEXTURE SNAME("texture")
 #define RB_TEX_COLOR SNAME("color")
