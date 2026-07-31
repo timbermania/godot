@@ -1,0 +1,188 @@
+# Interface design — `render-to-compositor-target` (design-it-thrice synthesis)
+
+**Branch:** `feature/render-to-compositor`. **Phase:** design (feeds the godot-proposals submission).
+**Inputs:** `render-to-compositor-design-brief.md`, `research-compositor-extension-points.md`. **Method:** three
+parallel interface designs under opposed mandates (minimal-depth / type-safety-maximalist / #7916-mirror), then
+synthesis. This doc is the recommendation; §5 lists the decisions still open for the `grilling` phase.
+
+## 0. Framing note — center of gravity is ISOLATION, not order (pending demand survey)
+
+This doc originally led with *caller-controlled order* as "the novel core." For **community mass appeal** that is
+the wrong headline — order is what the PSX-fold client needs, but the broad, popular demand is for the thing
+underneath it: **render *these specific* material-shaded objects into a separate compositor-owned target** (a
+holdout / render-layer). Order is one *dimension* within that primitive, not its center. Reframed one-liner:
+
+> **Render selected material-shaded geometry — through its real material pipeline, optionally in a
+> caller-controlled order — into a compositor-owned named target, so a `CompositorEffect` can consume it as an
+> isolated render layer.**
+
+**Evidence-backed lead use-cases** (from `research-community-demand.md`, exact 👍 via `gh api`). The
+neighborhood is one of the hottest in Godot rendering (#7916 193, #7379 136, #644 99, #798 94, #7174 95, #7849
+88 — several hundred combined upvotes), but demand is *diffuse* and the shallow end is *already served*, so the
+pitch must be disciplined:
+
+- **Lead 1 — the transparent / held-out counterpart to #7916** (193 👍, OPEN). #7916 explicitly declines
+  transparent passes and names no holdout/named-target concept — our exact seam. Ride its mindshare; occupy the
+  gap it declared out of scope.
+- **Lead 2 — object-isolated post-processing** (#7849, 88 👍; #2196, 55 👍). Render marked geometry into a named
+  target, run an effect on *just that layer*. This is precisely our named-target + `CompositorEffect` loop.
+- **Lead 3 — caller-controlled / NPR / toon transparent draw order** (#3986, 26 👍; #11251 OIT, 17 👍). Our
+  per-instance order key + `order_policy` is the first-class answer. (This re-vindicates the *order* dimension as
+  a genuine top-3 pitch — just not the sole headline.)
+
+**Do NOT claim (cite only as category heat):** outlines and x-ray — **Godot 4.5 shipped stencil Outline + X-Ray
+material presets** (#7174 closed, PR godot#80710 merged 2025-06-11), which pre-empts them; decals/portals/planar
+reflections — #7916's *opaque* scope; G-buffer/AOV access (#798), drawable textures (#7379), scriptable
+pipelines (#644) — adjacent umbrellas. Over-claiming any of these is the fastest route to closed-as-duplicate.
+
+**Discipline:** breadth belongs in the *pitch* (one seam, many clients), never in the *surface* (no god-feature
+knobs). The deferred hold-out seam (§2.5) *is* the render-layer framing — the two reinforce. **Framing mandate:
+file as the explicit "transparent / render-layer counterpart of #7916," with NAMED (not indexed) targets and a
+caller-controlled order key** — honest, defensible, least-duplicative.
+
+## 1. The three candidates (one line each)
+
+| | Declaration (A) | Typed target (B) | Order key (C) | Signature weak spot (self-reported) |
+|---|---|---|---|---|
+| **D1 minimal** | `render_mode compositor_target` (bool cap) + `hint_compositor_target` uint selector | `CompositorRenderTarget` resource via new `_get_render_targets()` virtual on the effect | reuse `sorting_offset` (documented overload) | `sorting_offset` dual meaning + bare-uint index-scoping hide an implicit contract |
+| **D2 type-safety** | `render_mode renders_to_compositor_target` (bool cap) + instance-side `compositor_target: CompositorRenderTarget` reference | `register_render_target(target) -> RID` handle, validated at registration | first-class `int32 (layer,bias)` per-instance | split binding = two places to touch; `CompositorOrderKey`-as-object over-engineered (should be `Vector2i`) |
+| **D3 #7916-mirror** | `render_mode compositor_ordered_pass N` (index directive, mirrors #7916) | `CompositorOrderedPass` resource on the `Compositor`, **indexed**, enum formats | per-instance `ordered_pass_key: int32` + per-pass `OrderPolicy` | **indexed** binding collides across effects (worst multi-effect story); orphaned if #7916 never lands |
+
+## 2. Comparison on the axes that matter upstream
+
+- **Interface depth.** All three are deep on the *target* seam (one declaration hides format resolution,
+  collision-checking, capability-gating, framebuffer/LOAD wiring, forced depth-write-off, the new render list).
+  They differ on the *declaration*: D1's bare `uint` selector and D3's baked-in shader index are shallower —
+  each hides a contract the caller can't see (which effect owns index *N*). D2's checkable instance reference is
+  the deepest-honest: the binding is a typed object the editor can validate.
+- **Discoverability / type-safety.** D2 > D3 > D1. A `Resource` reference gives an inspector configuration
+  warning when the target isn't registered; an `RID` handle makes a misspelling a register-time hard error
+  instead of a frame-1 `ERR_FAIL` empty RID. D3's index is type-checked but self-documents nothing. D1's
+  `sorting_offset` overload is undiscoverable except via docs — the fork's exact sin.
+- **Consistency with #7916.** D3 by construction; but D3 itself concedes the one axis it copied faithfully
+  (indexed buffers) is the axis that *hurts* the brief's "N named targets, multiple effects coexisting" goal.
+  The right reading: adopt #7916's *conventions that compose* (material self-declares via a `render_mode`
+  directive; compositor declares enumerated-format buffers; `CUSTOM_BUFFER0..N` aux-output vocabulary) and
+  diverge, with an argued reason, on the *one that doesn't* (flat global index space).
+- **GDScript ergonomics.** D1 lightest (reuses channels users know); D3 clean (`render_mode … N`,
+  `instance.ordered_pass_key = N`); D2 heaviest (split binding + the object-order-key mistake it self-flags).
+  The ergonomic floor is set by *where the binding lives*: on the instance (D2) costs keystrokes but is
+  checkable; on a shader uniform (D1) is terse but opaque; in the shader source (D3) is terse but forces one
+  shader per target.
+- **Cross-renderer / MSAA / multiview honesty.** All three land the same posture — RD-only by construction,
+  typed refusal (hard-fail at registration) not warn-and-corrupt, resolved-depth as a declared source. **All
+  three flag the identical gap:** the target declaration does not yet carry a typed multiview (`view_count` /
+  `array_layers`) or MSAA-samples policy. That field is required before the design is honest under
+  multiview/upscaling — an addition, not a guard-rail warning.
+
+## 2.5 The missing facet — SEAM PLACEMENT (deferred hold-out vs interleaved reroute)
+
+All three candidates inherited, unquestioned, the fork's **seam placement**: marked surfaces are *rerouted
+mid-pipeline* — pulled from `RENDER_LIST_ALPHA` and drawn at a hardcoded slot wedged between the transparent
+draw and the resolve. That interleaving is the design's real awkwardness, and it drives two anti-goals we
+otherwise can't shake: the pass slot is *pinned* (can't run after the full frame), and the mental model
+("this material renders through the compositor instead of the engine") is backwards — the compositor draws no
+meshes.
+
+**Recommended reframe — a deferred, held-out render layer:**
+```
+render full scene EXCLUDING marked prims      (normal engine render, to completion)
+  → render marked prims into the aux target   (self-contained pass, caller order, depth-test vs resolved depth)
+  → compositor effect composites aux → scene
+  → output
+```
+The marked instances are **held out** of the scene's normal lists entirely and rendered as a **self-contained
+deferred pass** hung off the compositor **stage-dispatch** point (where `_process_compositor_effects` already
+runs — research §1/§4), *not* spliced into the transparent draw loop. This:
+
+- **Decouples the primitive from the opaque/transparent internal structure** — much less hot-path surgery, same
+  insertion on Forward+ and Mobile.
+- **Fixes the framing:** the flag means "hold this instance out and render it, deferred, into a named aux
+  target" — a *render-layer / holdout* concept (film-compositing-shaped, legible to the rendering team), not
+  "render via the compositor." The engine still shades the material through its real pipeline.
+- **Makes the pass slot a first-class declared property of the target** — "after the full engine pass" becomes
+  the clean default, not a hardcoded mid-transparent wedge.
+
+**The one honest tradeoff (why `stage` must be a real declared knob, not hardcoded):** deferring past the MSAA
+resolve makes the marked geometry **single-sample**. In the existing vocabulary `POST_TRANSPARENT` fires *after*
+the resolve (research §4), so "after the full scene render" = post-resolve = no MSAA on the marked prims — fine
+for fold/decals/masks. A client that needs MSAA'd marked geometry declares an *earlier* stage (before resolve),
+accepting the interleaved placement for that case. So deferred-after-full-render is the **default**; the
+interleaved slot survives only as an explicit earlier-`stage` option, chosen by the target's declared stage,
+never silent. This converts the fork's single hardcoded slot into a meaningful, honest knob.
+
+## 3. Recommended synthesis — best-of, honoring the convergences
+
+**(A) Declaration — an INSTANCE property, not a material `render_mode`.** *(DECIDED — see §5.1.)*
+Opt-in lives on the `VisualInstance3D`/`GeometryInstance3D`, because holding an object out into a layer is a
+per-instance **routing/scheduling** decision, not a material **shading** capability. Consequence and the whole
+reason for the choice: **any material participates unchanged** — `StandardMaterial3D` or `ShaderMaterial`, no
+shader authoring — so a plain mesh can be a compositor layer. The material still shades through its real forward
+pipeline (constraint 1) automatically; the engine just routes the instance's draw into the aux target at the
+declared stage. This diverges from #7916's material-directive (`compositor_opaque_pass N`) and must be argued in
+the proposal: #7916's directive selects a *shading pass* (a material concern); ours is a *holdout/layer* concern
+that is material-agnostic and per-instance — the instance is its correct home, and that is exactly what lets a
+`StandardMaterial3D` mesh participate. A material `render_mode` survives **only** as an *optional* opt-in for
+shaders that want to emit aux outputs (coverage/weight/ID via the `CUSTOM_BUFFER0..N` vocabulary, §3.C / #7916);
+v1 needs none of that (coverage is engine-written). Reject D3's index-in-shader and D1's `uint` selector.
+
+**(B) Typed target — a name/handle-addressed `CompositorRenderTarget`, owned by the effect, validated at
+registration.** A typed `Resource` (D2) carrying enum'd `format`, `size_policy`, `load_policy` (LOAD default),
+`depth_source` (RESOLVED_SCENE / NONE), and `stage` (reusing `CompositorEffect.EffectCallbackType`, not a rival
+vocabulary). **Depth-write is not a field** — forced off structurally (all three agree). The effect declares it
+(D1's `_get_render_targets()` virtual *or* D2's `register_render_target() -> RID`; the virtual is more
+discoverable, the imperative call is more flexible — pick in §5), validated at registration: duplicate name →
+hard error, unrepresentable format / unsupported renderer-stage → hard error naming the renderer. Internally
+resolves to the existing `NTKey`, but **no user ever spells the string**. Adopt #7916's *enumerated-format* set;
+**diverge from its index to a name/handle** for multi-effect composability — argue this explicitly in the
+proposal (it is D3's own conceded weak point).
+
+**(B-binding) The instance binds the target by a checkable reference — this IS the opt-in.**
+`GeometryInstance3D.compositor_target: CompositorRenderTarget` (D2) — a single editor-validatable reference:
+setting it *is* how an object opts into the layer (no separate capability flag to keep in sync). Config warning
+if the referenced target isn't registered by any effect in the environment. Alongside it,
+`GeometryInstance3D.compositor_order: int` carries the order key (§3.C). Null target ⇒ the instance renders
+normally; a set target ⇒ it is held out and rendered into that target's deferred pass (§2.5).
+
+**(C) Order key — a first-class per-instance `int32`, plus a per-target order policy.**
+Reject reusing `sorting_offset` (D2 & D3 independently; D3's argument is decisive — this design *already* has a
+second ordering consumer, so the brief's "reuse until a second consumer bites" default is already met, and the
+float32-ULP cliff the fork hit is real). A dedicated `GeometryInstance3D.compositor_order: int` (exact across
+its range; stamped per-instance by the caller; **ties broken by stable insertion/fill order**, documented,
+decoupled from camera depth). Keep it a **plain scalar** (or `Vector2i` for layer+bias) — **not** a `RefCounted`
+object (D2's self-corrected mistake). Per-target `order_policy` (INSERTION vs KEY_ASCENDING) lets a target opt
+out of per-instance keys entirely (D3). Integer keys make NaN a non-issue — but still **extract the comparator
+and unit-test it** under `tests/servers/rendering/` (the `fold_order_sort.h` bar; handoff phase 4).
+
+**Engine-side (hidden):** a new `RENDER_LIST_COMPOSITOR_TARGET` sibling of `RENDER_LIST_ALPHA`
+(`render_forward_clustered.h:79-83`), a fill-branch routing capability-flagged surfaces off the alpha list, the
+swap of `sort_by_reverse_depth_and_priority()` for the caller's `order_policy`, and one
+`_render_list_with_draw_list` draw into the target's framebuffer at the declared stage (research §4). Coverage,
+if a client needs it, is a **dedicated engine-written aux attachment** (not a `color.a` override) — the minimal
+v1 step of #7916's `CUSTOM_BUFFER0..N` vocabulary, with no shader-language change yet.
+
+## 4. Why this is generalization-by-subtraction (the upstream thesis)
+
+Same caller effort as the fork — one `render_mode`, a per-instance order value, a compositor pass — but: the
+mode *names what it does*, the target handshake is *typed and discoverable*, the order key *can't cliff or go
+NaN-undefined*, the alpha override is *gone*, and N effects coexist. More capability (decals, ID/mask, NPR
+ordered transparency, WBOIT-later) through a smaller, honester interface. PSX-fold is one `.tres` + one shader.
+
+## 5. Decisions still open (for `grilling`, then the proposal)
+
+1. **Opt-in surface — DECIDED: instance property** (`GeometryInstance3D.compositor_target` reference), not a
+   material `render_mode`. Any material participates unchanged. Material `render_mode` reserved for optional
+   aux-output emission only. (Naming of an *optional* aux-output mode remains a later bikeshed.)
+2. **Named vs #7916-indexed — DECIDED: named** (per the framing mandate — named targets let N effects coexist;
+   the composability win beats the #7916 index-consistency loss; argue it in the proposal).
+3. **Process — DECIDED: file as the explicit "transparent / render-layer counterpart of #7916."** Standalone
+   proposal that references #7916 and occupies its declared-out-of-scope seam.
+4. **Target declaration style** — a `_get_render_targets()` virtual (discoverable, static) vs an imperative
+   `register_render_target() -> RID` (flexible, dynamic). Possibly both. *(open)*
+5. **Order key shape** — scalar `int compositor_order` vs `Vector2i(layer, bias)`. Default scalar until a client
+   needs layers. *(open, low-stakes)*
+6. **Multiview / MSAA target-decl fields** — the one gap all three designs flagged; must be specified as typed
+   fields on `CompositorRenderTarget`, not guard-rail-warned. *(open, must-close-before-proposal)*
+7. **Deferred vs interleaved stage semantics** — confirm the stage enum: is "after full scene render"
+   (post-resolve, single-sample) the default, with earlier stages opt-in for MSAA'd layers? (§2.5). *(open)*
+</content>
