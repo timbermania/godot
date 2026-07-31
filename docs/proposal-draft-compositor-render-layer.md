@@ -62,60 +62,85 @@ layers into named targets).
 ### Frame model — a deferred holdout layer (not a mid-pipeline reroute)
 
 ```
-render full scene EXCLUDING held-out instances     (normal engine render, to completion)
-  → render held-out instances into the aux target  (own pass · caller order · depth-test vs resolved scene depth · depth-write OFF)
-  → CompositorEffect composites aux target → scene  (at the target's declared stage)
+render full scene EXCLUDING held-out instances       (normal engine render, to completion)
+  → seed the layer target per seed_source            (CLEAR · resolved SCENE_COLOR · a bound Texture)
+  → render held-out instances into the layer target  (own pass · caller order · depth-test vs resolved scene depth · depth-write OFF)
+  → CompositorEffect composites layer → scene         (at the layer's declared stage)
   → output
 ```
 
-The held-out instances render as a **self-contained deferred pass** hung off the compositor stage-dispatch point,
-not spliced into the opaque/transparent draw loop. Default stage is **after the full scene render** (post-resolve);
-the target may declare an **earlier** stage when it needs MSAA'd layer geometry (see cross-renderer notes).
+This is a **post-resolve, pre-compositor-effect pass**: the held-out instances render as a **self-contained
+deferred pass** hung off the compositor stage-dispatch point (drawn just *before* the effects for that stage run),
+not spliced into the opaque/transparent draw loop. It runs late enough to have the full frame as context (resolved
+scene color + depth, so occlusion and a `SCENE_COLOR` seed both work) yet before the effect that consumes it.
+Default stage is **after the full scene render** (post-resolve); the layer may declare an **earlier** stage when it
+needs MSAA'd layer geometry (see cross-renderer notes). One residual coupling to state plainly: the held-out
+instances must be **gathered during the main fill** (culled, materials bound) so this later pass can draw them — so
+the pass has the full frame's *pixels* as context, but its *geometry* was collected upstream, during fill.
 
-### 1. The compositor declares a typed, named target (replaces the untyped `(context,name)` magic string)
+### 1. The layer's identity is a typed `Resource` — the shared symbol, not a magic string or an index
 
-A new `Resource` the `CompositorEffect` owns. All policy is typed and validated at registration — no magic
-string, no `RD.DataFormat` int leaking to users, no first-writer-wins aliasing
-(`render_scene_buffers_rd.cpp:328-352`).
+The handoff has two halves that must not be conflated: a **scene-side identity** (how the user and the instances
+name the layer) and a **render-side handle** (how the effect callback reads it, which is unavoidably a lookup in
+`RenderSceneBuffers` — the engine's actual store). The fork's magic string was bad because the user typed the
+render-side name *by hand on both sides* with no shared symbol. The fix is **not** to eliminate the render-side
+name; it is to **derive it automatically from a typed scene-side identity, so nobody ever types a string.**
+
+That identity is a **minimal `Resource` — an identity token, not a policy bag.** Both the opted-in instances and
+the producing effect reference the *same resource object*; the engine derives the internal `NTKey` from that
+resource's identity and **owns allocation** (keyed by identity → no first-writer-wins aliasing,
+`render_scene_buffers_rd.cpp:328-352`; no manual scratch allocation).
 
 ```gdscript
-class_name CompositorRenderTarget extends Resource
+class_name CompositorRenderLayer extends Resource
 
-@export var target_name : StringName                         # unique per compositor; not a handshake string
-@export var format      : Format = Format.INHERIT_SCENE_COLOR # enumerated (RGBA8/RGB10A2/RGBA16F/R8/R16UI…) — #7916 set
-@export var size_policy  : SizePolicy = SizePolicy.MATCH_RENDER_TARGET
-@export var load_policy  : LoadPolicy = LoadPolicy.LOAD        # LOAD (effect seeds, layer accumulates) | CLEAR
-@export var stage        : CompositorEffect.EffectCallbackType = EFFECT_CALLBACK_TYPE_POST_TRANSPARENT
-@export var depth_source  : DepthSource = DepthSource.RESOLVED_SCENE_DEPTH   # test vs scene depth | NONE
-@export var order_policy   : OrderPolicy = OrderPolicy.INSERTION   # INSERTION (stable) | ORDER_KEY_ASCENDING
-@export var view_policy     : ViewPolicy = ViewPolicy.MATCH_VIEW_COUNT   # multiview: match scene view_count
-# depth-WRITE is intentionally NOT a field — forced off for a holdout layer (structural invariant, not a knob).
+@export var format      : Format = Format.INHERIT_SCENE_COLOR  # enumerated (RGBA8/RGB10A2/RGBA16F/R8/R16UI…) — #7916 set
+@export var seed_source : SeedSource = SeedSource.CLEAR        # CLEAR | SCENE_COLOR | a bound Texture — the generalized seed
+@export var stage       : CompositorEffect.EffectCallbackType = EFFECT_CALLBACK_TYPE_POST_TRANSPARENT
+# Structural INVARIANTS, not fields (they define the holdout layer; exposing them as knobs would only shallow it):
+#   • depth-test vs the resolved scene depth, depth-WRITE forced off   • size matches the render target
+#   • view_count matches the scene (multiview)                         • post-resolve stage ⇒ single-sample
 ```
 
-The effect declares its targets (discoverable virtual; an imperative `register_render_target()` escape hatch is
-available for dynamic cases):
+`seed_source` is the generalization the fork lacked: the layer is not forced to start from "the main scene after
+opaque." It starts from whatever you bind — `CLEAR`, the resolved `SCENE_COLOR`, or an arbitrary `Texture`
+(another effect's output, a SubViewport). The effect declares the layers it produces via a discoverable virtual,
+and reads by handing back the **same resource object** — never a string, never a global slot index:
 
 ```gdscript
 extends CompositorEffect
-func _get_render_targets() -> Array[CompositorRenderTarget]:
-    return [preload("res://fold_target.tres")]
+func _get_render_layers() -> Array[CompositorRenderLayer]:
+    return [preload("res://fold_layer.tres")]                       # engine allocates the backing texture, keyed by identity
 func _render_callback(stage: int, render_data: RenderData) -> void:
-    var tex : RID = get_render_target_texture(&"psx_fold")   # typed lookup; no magic string
+    var tex : RID = get_layer_texture(preload("res://fold_layer.tres"))   # same resource → no string, no index
     # … composite tex over the frame with the effect's own shader …
 ```
 
-### 2. An instance opts in by referencing the target (this IS the opt-in)
+This is the current design's typed-target idea **slimmed from a seven-field policy monster to a two-field identity
+token**: the order key moves to the instance (§2); depth-source/write, size, and multiview become structural
+invariants; and the compositor gains exactly **one** accessor (`get_layer_texture`) — as close to "pure consumer"
+as possible, since an effect must have *some* way to name the buffer it reads. *(A scene-`Node` identity variant —
+opt in by reparenting under a `RenderLayer3D` — was considered and rejected: a `CompositorEffect` is a `Resource`,
+so two resources referencing one resource is clean, whereas an effect referencing a scene node by `NodePath`
+across the scene/render boundary is not. See interface-design §5.4.)
+
+### 2. An instance opts in by referencing the same layer resource (this IS the opt-in)
 
 ```gdscript
 # GeometryInstance3D (any material — StandardMaterial3D or ShaderMaterial):
-@export var compositor_target : CompositorRenderTarget   # null = render normally; set = held out into this target
-@export var compositor_order  : int = 0                  # caller order key when order_policy == ORDER_KEY_ASCENDING
+@export var render_layer       : CompositorRenderLayer   # null = render normally; set = held out into this layer
+@export var render_layer_order : int = 0                 # caller order key; ties break by stable insertion/fill order
 ```
 
-Setting `compositor_target` holds the instance out of the normal lists and into the target's deferred pass. The
-editor emits a configuration warning if the referenced target is not declared by any effect in the environment.
-`compositor_order` is an exact `int` (no float32-ULP cliff); **ties break by stable insertion/fill order**,
-decoupled from camera depth. The pure comparator is extracted and unit-tested (see Tests).
+Setting `render_layer` holds the instance out of the normal lists and into that layer's deferred pass — the **same
+resource object** the effect declares (§1), so the producer↔consumer binding is one editor-checkable symbol, not a
+string and not a global index. The editor config-warns if the referenced layer is not declared by any effect in the
+environment. `render_layer_order` is an exact `int` (no float32-ULP cliff); **ties break by stable insertion/fill
+order**, decoupled from camera depth. The pure comparator is extracted and unit-tested (see Tests).
+
+*(The split binding — assign the `.tres` to instances* and *to the effect — is inherent, not a wart: a producer and
+a consumer must agree on an identity, so something is referenced twice. It is the exact shape of `ViewportTexture`,
+which binds producer=Viewport and consumer=sample-site and is uncontroversial.)*
 
 ### 3. Optional: shader-emitted aux outputs (converges with #7916; not needed for v1)
 
@@ -126,12 +151,11 @@ where a client needs it, is an engine-written side attachment, so no shader-lang
 ### Engine implementation sketch (Forward+ shown; Mobile mirrors)
 
 - New `RENDER_LIST_COMPOSITOR_LAYER` sibling of `RENDER_LIST_ALPHA` (`render_forward_clustered.h:79-83`); a
-  fill-branch routes instances with a non-null `compositor_target` into it and out of opaque/alpha.
-- The list sorts by `order_policy` (stable insertion, or by `compositor_order`) — never
-  `sort_by_reverse_depth_and_priority()`.
-- At each compositor stage dispatch, before the effects for that stage run, the renderer draws any layer lists
-  whose target declares that stage, into the target's framebuffer, LOAD, depth-test vs resolved scene depth,
-  depth-write masked off.
+  fill-branch routes instances with a non-null `render_layer` into it and out of opaque/alpha.
+- The list sorts by `render_layer_order` (stable insertion on ties) — never `sort_by_reverse_depth_and_priority()`.
+- At each compositor stage dispatch, before the effects for that stage run, the renderer seeds each layer's
+  framebuffer per its `seed_source`, then draws that layer's list into it — depth-test vs resolved scene depth,
+  depth-write masked off. The framebuffer is the engine-allocated texture keyed by the layer resource's identity.
 
 ## If this enhancement will not be used often, can it be worked around with a few lines of script?
 
@@ -192,8 +216,10 @@ renderers, a typed layer above `RenderSceneBuffersRD`'s named-texture store, and
 
 1. **Opt-in on the instance, not a material directive** — because holdout is a per-instance routing decision, and
    this is what lets any `StandardMaterial3D` mesh participate without a shader.
-2. **Named targets, not indexed buffers** — so N independent effects/plugins coexist without colliding on a flat
-   global slot space (a limitation #7916 itself carries for its 4 buffers).
+2. **Identity-resource layers, not indexed buffers** — the layer is addressed by a shared `CompositorRenderLayer`
+   object reference (§1), so N independent effects/plugins coexist without colliding on a flat global slot space (a
+   limitation #7916 itself carries for its 4 buffers), and the producer↔consumer binding is one editor-checkable
+   symbol rather than a hand-typed string or a slot number.
 
 ### Tests
 

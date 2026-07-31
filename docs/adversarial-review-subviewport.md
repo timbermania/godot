@@ -159,3 +159,62 @@ PSX-fold is a legitimate motivating client. But the current draft over-claims an
 > primitive is for the case where you need that geometry occluded by the real scene, in your order, seeded and
 > composited in-frame by the effect that owns it. That case — not "object-isolated post" — is what only the engine
 > can do.*
+
+---
+
+## Addendum — should this be a SubViewport *enhancement* instead? (touch-point analysis)
+
+A second attack: the current proposal changes the **scene renderer** (a new render list) and the **instance**
+(a routing property) under the banner of a **compositor** feature. That is mis-housed — Godot's compositor
+(#80214) was deliberately a post-hoc, read-mostly effect layer that does *not* reach into scene rendering. So:
+could this be an *enhancement to SubViewports* instead, keeping the compositor a pure consumer?
+
+### What the SubViewport framing deletes (the win)
+
+- **The entire typed-target subsystem** (`CompositorRenderTarget`, the named-target API over `NTKey`, the
+  `_get_render_targets()`/`register_render_target()` surface). The compositor accesses the layer by sampling a
+  **`ViewportTexture`** — an existing, typed, editor-assignable handle. This is a strictly better answer to
+  "how does the compositor address the layer?" than either #7916's index *or* a new target resource.
+- **The `VisualInstance3D.compositor_target` property.** Opt-in becomes *reparent under the SubViewport*.
+- **The new `RENDER_LIST_COMPOSITOR_LAYER` + fill-branch + hot-loop touch.** Reuses the SubViewport's own list.
+- **The mis-housing.** The compositor stays a consumer; the engine change is viewport-scoped.
+
+### What it reintroduces (the cost) — and the convergence result
+
+| Capability | SubViewport enhancement needed | Cost |
+|---|---|---|
+| B occlusion vs main depth | expose the existing XR depth-override (`texture_storage.cpp:4540`) | low — mechanism already exists |
+| C caller-order | a transparent-list sort policy | same either way |
+| D seed-LOAD + in-frame accumulate | **invert viewport scheduling** so the sub-render runs *inside* the main frame, after main opaque, before the consuming effect | high — global `RendererViewport` change |
+| runtime | a real SubViewport is a full second render (cull + resolve + tonemap + round-trip) | high per-frame overhead |
+
+**The decisive result:** B and C can be added to a SubViewport. **D cannot — without making the SubViewport
+render as a mid-main-frame sub-pass, at which point it has stopped being a SubViewport and become the held-out
+list, now carrying Node baggage (own world / camera / environment / transform to keep synced).** A SubViewport
+enhanced to be *performant and correct* for the seed case **converges onto the held-out-list design.**
+
+The forcing function is **B (occlusion against the main scene's depth)**: any layer that must be occluded by
+main-scene geometry has to render *after* main opaque, inside the main timeline, sharing main depth — and a
+SubViewport structurally renders *before* the main viewport. So occlusion alone, independent of the seed, is what
+a pre-rendered SubViewport cannot provide.
+
+### The honest segmentation
+
+- **Clients that need occlusion-against-main-depth or the in-frame seed (the PSX-fold, ordered decals into the
+  real scene)** → require the main-timeline seam. SubViewport-enhancement cannot reach them without becoming the
+  held-out list. This is the deep, engine-only core.
+- **Clients that do NOT need main-scene occlusion (isolated-object post, x-ray/overlay layers meant to draw
+  *over* the scene, NPR panels)** → served by **enhancing SubViewports** (share-depth optional, caller-order
+  sort), accessed via `ViewportTexture`. Lower touch, better-housed, broad appeal.
+
+### Recommendation (Q4, refined)
+
+Do not force one primitive to serve both segments. **Split by the occlusion forcing-function:**
+1. A small **caller-ordered transparent sort** (useful independently; #3986).
+2. A small **viewport depth-share** exposure (the XR override, unbound today).
+   — together these make SubViewports serve the non-occluded segment, with `ViewportTexture` as the access API.
+3. The **held-out-list primitive** survives *only* for the occlusion/in-frame-seed core — narrower, honestly
+   engine-scoped, and no longer pretending to be a general compositor feature.
+
+Lower total touch is achieved by *splitting*, not unifying: each piece lands in its proper house at a lower review
+bar, and the mass-appeal clients ship without waiting on the hard main-timeline seam.

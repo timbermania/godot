@@ -126,38 +126,39 @@ that is material-agnostic and per-instance — the instance is its correct home,
 shaders that want to emit aux outputs (coverage/weight/ID via the `CUSTOM_BUFFER0..N` vocabulary, §3.C / #7916);
 v1 needs none of that (coverage is engine-written). Reject D3's index-in-shader and D1's `uint` selector.
 
-**(B) Typed target — a name/handle-addressed `CompositorRenderTarget`, owned by the effect, validated at
-registration.** A typed `Resource` (D2) carrying enum'd `format`, `size_policy`, `load_policy` (LOAD default),
-`depth_source` (RESOLVED_SCENE / NONE), and `stage` (reusing `CompositorEffect.EffectCallbackType`, not a rival
-vocabulary). **Depth-write is not a field** — forced off structurally (all three agree). The effect declares it
-(D1's `_get_render_targets()` virtual *or* D2's `register_render_target() -> RID`; the virtual is more
-discoverable, the imperative call is more flexible — pick in §5), validated at registration: duplicate name →
-hard error, unrepresentable format / unsupported renderer-stage → hard error naming the renderer. Internally
-resolves to the existing `NTKey`, but **no user ever spells the string**. Adopt #7916's *enumerated-format* set;
-**diverge from its index to a name/handle** for multi-effect composability — argue this explicitly in the
-proposal (it is D3's own conceded weak point).
+**(B) Typed identity — a `CompositorRenderLayer` resource, owned by the effect, validated at registration.**
+*(Shape finalized in §5.4: slimmed from D2's 7-field target to a ~2-field identity token.)* A typed `Resource`
+carrying enum'd `format`, `seed_source` (`CLEAR` / `SCENE_COLOR` / bound `Texture`), and `stage` (reusing
+`CompositorEffect.EffectCallbackType`, not a rival vocabulary). **Depth-write, depth-source, size, and multiview
+are NOT fields** — structural invariants of a holdout layer (§5.6). The effect declares it (`_get_render_layers()`
+virtual, or an imperative `register_render_layer()` escape hatch), validated at registration: duplicate identity →
+hard error, unrepresentable format / unsupported renderer-stage → hard error naming the renderer. The engine
+derives the existing `NTKey` from the resource's *identity*, so **no user ever spells a string** and there is no
+global slot index. Adopt #7916's *enumerated-format* set; **diverge from its index to a resource identity** for
+multi-effect composability — argue this explicitly in the proposal (it is D3's own conceded weak point).
 
-**(B-binding) The instance binds the target by a checkable reference — this IS the opt-in.**
-`GeometryInstance3D.compositor_target: CompositorRenderTarget` (D2) — a single editor-validatable reference:
-setting it *is* how an object opts into the layer (no separate capability flag to keep in sync). Config warning
-if the referenced target isn't registered by any effect in the environment. Alongside it,
-`GeometryInstance3D.compositor_order: int` carries the order key (§3.C). Null target ⇒ the instance renders
-normally; a set target ⇒ it is held out and rendered into that target's deferred pass (§2.5).
+**(B-binding) The instance binds the layer by referencing the same resource — this IS the opt-in.**
+`GeometryInstance3D.render_layer: CompositorRenderLayer` — a single editor-validatable reference to the *same
+object* the effect declares: setting it *is* how an object opts in (no separate capability flag to keep in sync).
+Config warning if the referenced layer isn't declared by any effect in the environment. Alongside it,
+`GeometryInstance3D.render_layer_order: int` carries the order key (§3.C). Null ⇒ the instance renders normally; a
+set layer ⇒ it is held out and rendered into that layer's deferred pass (§2.5). The split binding (instance + effect
+both reference the `.tres`) is inherent — the `ViewportTexture` shape — not a wart (§5.4.1).
 
-**(C) Order key — a first-class per-instance `int32`, plus a per-target order policy.**
+**(C) Order key — a first-class per-instance `int32`, ties broken by stable insertion.**
 Reject reusing `sorting_offset` (D2 & D3 independently; D3's argument is decisive — this design *already* has a
 second ordering consumer, so the brief's "reuse until a second consumer bites" default is already met, and the
-float32-ULP cliff the fork hit is real). A dedicated `GeometryInstance3D.compositor_order: int` (exact across
+float32-ULP cliff the fork hit is real). A dedicated `GeometryInstance3D.render_layer_order: int` (exact across
 its range; stamped per-instance by the caller; **ties broken by stable insertion/fill order**, documented,
-decoupled from camera depth). Keep it a **plain scalar** (or `Vector2i` for layer+bias) — **not** a `RefCounted`
-object (D2's self-corrected mistake). Per-target `order_policy` (INSERTION vs KEY_ASCENDING) lets a target opt
-out of per-instance keys entirely (D3). Integer keys make NaN a non-issue — but still **extract the comparator
-and unit-test it** under `tests/servers/rendering/` (the `fold_order_sort.h` bar; handoff phase 4).
+decoupled from camera depth). Keep it a **plain scalar** (or `Vector2i` for layer+bias later) — **not** a
+`RefCounted` object (D2's self-corrected mistake). Integer keys make NaN a non-issue — but still **extract the
+comparator and unit-test it** under `tests/servers/rendering/` (the `fold_order_sort.h` bar; handoff phase 4).
 
-**Engine-side (hidden):** a new `RENDER_LIST_COMPOSITOR_TARGET` sibling of `RENDER_LIST_ALPHA`
-(`render_forward_clustered.h:79-83`), a fill-branch routing capability-flagged surfaces off the alpha list, the
-swap of `sort_by_reverse_depth_and_priority()` for the caller's `order_policy`, and one
-`_render_list_with_draw_list` draw into the target's framebuffer at the declared stage (research §4). Coverage,
+**Engine-side (hidden):** a new `RENDER_LIST_COMPOSITOR_LAYER` sibling of `RENDER_LIST_ALPHA`
+(`render_forward_clustered.h:79-83`), a fill-branch routing held-out instances off the alpha list, the
+swap of `sort_by_reverse_depth_and_priority()` for the stable `render_layer_order` sort, and one
+`_render_list_with_draw_list` draw into the layer's framebuffer (seeded per `seed_source`) at the declared stage
+(research §4). Coverage,
 if a client needs it, is a **dedicated engine-written aux attachment** (not a `color.a` override) — the minimal
 v1 step of #7916's `CUSTOM_BUFFER0..N` vocabulary, with no shader-language change yet.
 
@@ -168,21 +169,43 @@ mode *names what it does*, the target handshake is *typed and discoverable*, the
 NaN-undefined*, the alpha override is *gone*, and N effects coexist. More capability (decals, ID/mask, NPR
 ordered transparency, WBOIT-later) through a smaller, honester interface. PSX-fold is one `.tres` + one shader.
 
-## 5. Decisions still open (for `grilling`, then the proposal)
+## 5. Decisions (post-grilling — most now closed)
 
-1. **Opt-in surface — DECIDED: instance property** (`GeometryInstance3D.compositor_target` reference), not a
+1. **Opt-in surface — DECIDED: instance property** (`GeometryInstance3D.render_layer` reference), not a
    material `render_mode`. Any material participates unchanged. Material `render_mode` reserved for optional
    aux-output emission only. (Naming of an *optional* aux-output mode remains a later bikeshed.)
 2. **Named vs #7916-indexed — DECIDED: named** (per the framing mandate — named targets let N effects coexist;
    the composability win beats the #7916 index-consistency loss; argue it in the proposal).
 3. **Process — DECIDED: file as the explicit "transparent / render-layer counterpart of #7916."** Standalone
    proposal that references #7916 and occupies its declared-out-of-scope seam.
-4. **Target declaration style** — a `_get_render_targets()` virtual (discoverable, static) vs an imperative
-   `register_render_target() -> RID` (flexible, dynamic). Possibly both. *(open)*
-5. **Order key shape** — scalar `int compositor_order` vs `Vector2i(layer, bias)`. Default scalar until a client
-   needs layers. *(open, low-stakes)*
-6. **Multiview / MSAA target-decl fields** — the one gap all three designs flagged; must be specified as typed
-   fields on `CompositorRenderTarget`, not guard-rail-warned. *(open, must-close-before-proposal)*
-7. **Deferred vs interleaved stage semantics** — confirm the stage enum: is "after full scene render"
-   (post-resolve, single-sample) the default, with earlier stages opt-in for MSAA'd layers? (§2.5). *(open)*
+4. **Declaration / identity surface — DECIDED: a minimal identity `Resource`, `CompositorRenderLayer`.** The
+   handoff splits into a scene-side *identity* (typed, editor-discoverable) and a render-side *handle* (an
+   unavoidable `RenderSceneBuffers` name lookup). The magic string was bad because the user typed the render-side
+   name by hand on both sides; the fix is to **derive the render key from a typed identity object** so no string is
+   ever typed. Both the instance (`GeometryInstance3D.render_layer`) and the effect (`_get_render_layers()` +
+   `get_layer_texture(layer)`) reference the *same resource object*; the engine allocates the backing texture keyed
+   by that identity (no first-writer-wins aliasing, no manual scratch). This is candidate B (typed target) **slimmed
+   from a 7-field policy bag to a ~2-field identity token** (format + seed_source + stage); the compositor gains
+   exactly one accessor, staying a near-pure consumer. An imperative `register_render_layer()` escape hatch remains
+   available for dynamic cases.
+   - **4.1 — split binding is inherent, not a wart.** Assigning the `.tres` to instances *and* the effect is the
+     same shape as `ViewportTexture` (producer + consumer must agree on one identity). Editor-validated same-object
+     reference is the acceptable form.
+   - **4.2 — Node identity variant considered and REJECTED.** A `RenderLayer3D` scene node (opt in by reparenting)
+     would mirror SubViewport ergonomics, but a `CompositorEffect` is a `Resource`; two resources referencing one
+     resource is clean, whereas an effect referencing a scene node by `NodePath` across the scene/render boundary is
+     not. Choose the node only if drag-under-it ergonomics ever outweigh effect-side cleanliness — they don't today.
+5. **Order key shape — DECIDED: scalar `int render_layer_order`** on the instance, ties broken by stable
+   insertion/fill order. `Vector2i(layer, bias)` deferred until a client needs layers. *(low-stakes)*
+6. **Multiview / MSAA — DECIDED: structural invariants, NOT declaration fields.** A holdout layer *always* matches
+   the scene `view_count` and matches the render-target size; a post-resolve stage is single-sample by construction,
+   an earlier stage inherits scene MSAA. These define the primitive, so exposing them as knobs would only shallow
+   the interface. They are stated in docs and (where a stage is unrepresentable on a renderer) hard-fail at
+   registration — never guard-rail-warned. *(closed)*
+7. **Deferred vs interleaved stage — DECIDED: post-resolve is the default.** The layer is a post-resolve,
+   pre-compositor-effect pass (full-frame pixels as context; occlusion + `SCENE_COLOR` seed both work); an earlier
+   (pre-resolve) stage is opt-in only for clients that need MSAA'd layer geometry (§2.5). *(closed)*
+8. **Seed source — DECIDED: generalized via `seed_source`** (`CLEAR` | `SCENE_COLOR` | a bound `Texture`), not
+   hardcoded to "the main scene after opaque." This fixes the fork's placement bug (which broke mixing transparents
+   between the main scene and the layer) and is the stateless-handoff instinct parameterized. *(closed)*
 </content>
