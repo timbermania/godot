@@ -130,8 +130,8 @@ v1 needs none of that (coverage is engine-written). Reject D3's index-in-shader 
 *(Shape finalized in §5.4: slimmed from D2's 7-field target to a ~2-field identity token.)* A typed `Resource`
 carrying enum'd `format`, `seed_source` (`CLEAR` / `SCENE_COLOR` / bound `Texture`), and `stage` (reusing
 `CompositorEffect.EffectCallbackType`, not a rival vocabulary). **Depth-write, depth-source, size, and multiview
-are NOT fields** — structural invariants of a holdout layer (§5.6). The effect declares it (`_get_render_layers()`
-virtual, or an imperative `register_render_layer()` escape hatch), validated at registration: duplicate identity →
+are NOT fields** — structural invariants of a holdout layer (§5.6). The effect declares it as an **exported
+`Array[CompositorRenderLayer]` property** (house style — see §5.4), validated at registration: duplicate identity →
 hard error, unrepresentable format / unsupported renderer-stage → hard error naming the renderer. The engine
 derives the existing `NTKey` from the resource's *identity*, so **no user ever spells a string** and there is no
 global slot index. Adopt #7916's *enumerated-format* set; **diverge from its index to a resource identity** for
@@ -178,16 +178,15 @@ ordered transparency, WBOIT-later) through a smaller, honester interface. PSX-fo
    the composability win beats the #7916 index-consistency loss; argue it in the proposal).
 3. **Process — DECIDED: file as the explicit "transparent / render-layer counterpart of #7916."** Standalone
    proposal that references #7916 and occupies its declared-out-of-scope seam.
-4. **Declaration / identity surface — DECIDED: a minimal identity `Resource`, `CompositorRenderLayer`.** The
-   handoff splits into a scene-side *identity* (typed, editor-discoverable) and a render-side *handle* (an
-   unavoidable `RenderSceneBuffers` name lookup). The magic string was bad because the user typed the render-side
-   name by hand on both sides; the fix is to **derive the render key from a typed identity object** so no string is
-   ever typed. Both the instance (`GeometryInstance3D.render_layer`) and the effect (`_get_render_layers()` +
-   `get_layer_texture(layer)`) reference the *same resource object*; the engine allocates the backing texture keyed
-   by that identity (no first-writer-wins aliasing, no manual scratch). This is candidate B (typed target) **slimmed
-   from a 7-field policy bag to a ~2-field identity token** (format + seed_source + stage); the compositor gains
-   exactly one accessor, staying a near-pure consumer. An imperative `register_render_layer()` escape hatch remains
-   available for dynamic cases.
+4. **Declaration / identity surface — DECIDED: a minimal identity `Resource`, `CompositorRenderLayer`, declared as
+   an exported property on the effect.** The handoff splits into a scene-side *identity* (typed, editor-discoverable)
+   and a render-side *handle* (an unavoidable `RenderSceneBuffers` name lookup). The magic string was bad because the
+   user typed the render-side name by hand on both sides; the fix is to **derive the render key from a typed identity
+   object** so no string is ever typed. Both the instance (`GeometryInstance3D.render_layer`) and the effect
+   (`@export var render_layers: Array[CompositorRenderLayer]` + `get_layer_texture(layer)`) reference the *same
+   resource object*; the engine allocates the backing texture keyed by that identity (no first-writer-wins aliasing,
+   no manual scratch). This is candidate B (typed target) **slimmed from a 7-field policy bag to a ~2-field identity
+   token** (format + seed_source + stage); the compositor gains exactly one accessor, staying a near-pure consumer.
    - **4.1 — split binding is inherent, not a wart.** Assigning the `.tres` to instances *and* the effect is the
      same shape as `ViewportTexture` (producer + consumer must agree on one identity). Editor-validated same-object
      reference is the acceptable form.
@@ -195,6 +194,14 @@ ordered transparency, WBOIT-later) through a smaller, honester interface. PSX-fo
      would mirror SubViewport ergonomics, but a `CompositorEffect` is a `Resource`; two resources referencing one
      resource is clean, whereas an effect referencing a scene node by `NodePath` across the scene/render boundary is
      not. Choose the node only if drag-under-it ergonomics ever outweigh effect-side cleanliness — they don't today.
+   - **4.3 — declaration is a property, NOT a virtual or an imperative call.** The existing `CompositorEffect`
+     declares every need as a bound property (`access_resolved_color`, `needs_motion_vectors`, …), its only
+     `GDVIRTUAL` is `_render_callback`, and `Compositor.compositor_effects` is a `TypedArray` property. So
+     `render_layers` follows that precedent as an exported `Array[CompositorRenderLayer]`. A `_get_render_layers()`
+     virtual (no precedent; risks per-frame GDScript dispatch on the render thread) and an imperative
+     `register_render_layer()` (no precedent; the team adds dynamic escape hatches only on demonstrated need) are
+     both rejected for v1. `get_layer_texture(layer)` is a bound method callable from inside `_render_callback`,
+     which is exactly where frame data is read.
 5. **Order key shape — DECIDED: scalar `int render_layer_order`** on the instance, ties broken by stable
    insertion/fill order. `Vector2i(layer, bias)` deferred until a client needs layers. *(low-stakes)*
 6. **Multiview / MSAA — DECIDED: structural invariants, NOT declaration fields.** A holdout layer *always* matches

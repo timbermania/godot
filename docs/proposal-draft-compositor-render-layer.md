@@ -104,25 +104,30 @@ class_name CompositorRenderLayer extends Resource
 
 `seed_source` is the generalization the fork lacked: the layer is not forced to start from "the main scene after
 opaque." It starts from whatever you bind — `CLEAR`, the resolved `SCENE_COLOR`, or an arbitrary `Texture`
-(another effect's output, a SubViewport). The effect declares the layers it produces via a discoverable virtual,
-and reads by handing back the **same resource object** — never a string, never a global slot index:
+(another effect's output, a SubViewport). The effect declares the layers it produces as an **exported property**
+(matching the existing `CompositorEffect` house style — `access_resolved_color`, `needs_motion_vectors` … are all
+bound properties, and `Compositor.compositor_effects` is itself a `TypedArray` property), and reads by handing back
+the **same resource object** — never a string, never a global slot index:
 
 ```gdscript
 extends CompositorEffect
-func _get_render_layers() -> Array[CompositorRenderLayer]:
-    return [preload("res://fold_layer.tres")]                       # engine allocates the backing texture, keyed by identity
+@export var render_layers : Array[CompositorRenderLayer]              # engine allocates each backing texture, keyed by identity
 func _render_callback(stage: int, render_data: RenderData) -> void:
-    var tex : RID = get_layer_texture(preload("res://fold_layer.tres"))   # same resource → no string, no index
+    var tex : RID = get_layer_texture(render_layers[0])              # same resource → no string, no index
     # … composite tex over the frame with the effect's own shader …
 ```
 
-This is the current design's typed-target idea **slimmed from a seven-field policy monster to a two-field identity
-token**: the order key moves to the instance (§2); depth-source/write, size, and multiview become structural
-invariants; and the compositor gains exactly **one** accessor (`get_layer_texture`) — as close to "pure consumer"
-as possible, since an effect must have *some* way to name the buffer it reads. *(A scene-`Node` identity variant —
-opt in by reparenting under a `RenderLayer3D` — was considered and rejected: a `CompositorEffect` is a `Resource`,
-so two resources referencing one resource is clean, whereas an effect referencing a scene node by `NodePath`
-across the scene/render boundary is not. See interface-design §5.4.)
+The only new `GDVIRTUAL` stays `_render_callback` (the existing one); declaration is a property, read is a bound
+method callable from the callback — no per-frame GDScript dispatch on the render thread. This is the current
+design's typed-target idea **slimmed from a seven-field policy monster to a two-field identity token**: the order
+key moves to the instance (§2); depth-source/write, size, and multiview become structural invariants; and the
+compositor gains exactly **one** accessor (`get_layer_texture`) — as close to "pure consumer" as possible, since an
+effect must have *some* way to name the buffer it reads. *(A scene-`Node` identity variant — opt in by reparenting
+under a `RenderLayer3D` — was considered and rejected: a `CompositorEffect` is a `Resource`, so two resources
+referencing one resource is clean, whereas an effect referencing a scene node by `NodePath` across the
+scene/render boundary is not. An imperative `register_render_layer()` and a `_get_render_layers()` virtual were
+also rejected — neither has precedent in this API, which declares needs as properties, not method calls or
+virtuals. See interface-design §5.4.)
 
 ### 2. An instance opts in by referencing the same layer resource (this IS the opt-in)
 
@@ -204,10 +209,11 @@ renderers, a typed layer above `RenderSceneBuffersRD`'s named-texture store, and
 - **RD-renderers only, capability-gated.** Compositor is Forward+/Mobile only; `gl_compatibility` cannot dispatch
   compositor callbacks (`rasterizer_scene_gles3.h:152`). Registration **hard-fails** (naming the renderer) on
   unsupported renderers/stages — never warn-and-corrupt.
-- **MSAA is explicit, not warned.** A target whose `stage` is post-resolve is single-sample (its geometry is
-  composited after the scene resolve); a target declaring a pre-resolve stage inherits scene MSAA samples. Stated,
-  chosen by the author, never silent.
-- **Multiview via `view_policy`** (`MATCH_VIEW_COUNT`) — a typed field, not a guard-rail.
+- **MSAA is explicit, not warned.** A layer whose `stage` is post-resolve is single-sample (its geometry is
+  composited after the scene resolve); a layer declaring a pre-resolve stage inherits scene MSAA samples. Stated,
+  chosen by the author via the `stage` field, never silent.
+- **Multiview is a structural invariant, not a knob** — a layer always matches the scene `view_count`; there is no
+  field to get wrong (§interface-design 5.6).
 - **We do NOT claim** outlines or x-ray — Godot 4.5 ships stencil Outline/X-Ray presets
   ([#7174](https://github.com/godotengine/godot-proposals/issues/7174), PR godot#80710); nor decals/portals/
   planar reflections — #7916's opaque scope. These are cited as category heat, not deliverables.
@@ -220,6 +226,38 @@ renderers, a typed layer above `RenderSceneBuffersRD`'s named-texture store, and
    object reference (§1), so N independent effects/plugins coexist without colliding on a flat global slot space (a
    limitation #7916 itself carries for its 4 buffers), and the producer↔consumer binding is one editor-checkable
    symbol rather than a hand-typed string or a slot number.
+
+### Anticipated upstream objections (and how this proposal answers them)
+
+The rendering-team concerns this most likely trips, stated plainly so they can be argued rather than discovered:
+
+1. **"This overlaps #7916 — reconcile or wait."** The biggest risk. #7916 owns the custom-buffer/AOV design space
+   and is "needs consensus." This proposal is deliberately the **transparent / held-out counterpart** #7916 declared
+   out of scope, and it *reuses* #7916's conventions (enumerated formats, the `CUSTOM_BUFFER0..N` aux-output
+   vocabulary) rather than inventing rivals — diverging only on identity-vs-index, with an argued reason. **Ask
+   before building:** the honest sequencing is to confirm with the #7916 owners whether this belongs *inside* #7916
+   or *alongside* it, before any PR. A likely-acceptable outcome is "accepted in principle, landed in #7916's orbit."
+
+2. **"The compositor must not draw meshes."** `CompositorEffect` (#80214) was built consumer-only and DrawList-from-
+   effect access was declined (#13405/#13406, closed). This proposal does **not** make the compositor draw geometry:
+   the *engine's* scene renderer draws a held-out list into a target; the compositor only **consumes** it
+   (`get_layer_texture`). The opt-in is a per-instance scene decision, not a compositor capability. The framing is
+   "held-out scene render layer," not "render via the compositor" — and that distinction is load-bearing.
+
+3. **"Scene render now depends on compositor state."** With `render_layers` declared on the effect, a reviewer may
+   note the scene renderer's holdout behavior depends on which effects are present. The real driver is the
+   **per-instance** `render_layer` reference (the effect only declares the *sink* + allocates it); an instance
+   pointing at a layer no active effect declares is a config-warned no-op, not corruption. The dependency is a
+   registration-time lookup, not a per-frame coupling.
+
+4. **"Hot-path cost."** A new `RENDER_LIST` + fill-branch in both RD renderers is permanent surface. It is
+   capability-gated (RD-only), zero-cost when no instance opts in (an empty list is skipped), and adds no per-frame
+   GDScript dispatch (declaration is a property, read is a callback-time method). The touch is one enum slot, one
+   fill branch, one sort policy, one draw site per renderer (research §4).
+
+5. **"Needs a champion + proof."** A working spike (the fork's PSX-fold) demonstrates the capability on real
+   hardware and proves the `CompositorEffect` wall dissolves. What it still needs is a core-team advocate; this
+   proposal exists to earn one, not to pre-empt the PR.
 
 ### Tests
 
