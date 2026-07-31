@@ -1,9 +1,15 @@
 # PROPOSAL DRAFT — Compositor render layers: render selected material-shaded geometry into a compositor-owned target, in caller order
 
 > **Status:** draft for `godotengine/godot-proposals`. Follows the official proposal template (the six headers).
-> Positioned as the **transparent / render-layer counterpart of [#7916](https://github.com/godotengine/godot-proposals/issues/7916)**.
+> **Positioned to land *inside* the orbit of [#7916](https://github.com/godotengine/godot-proposals/issues/7916)** —
+> this is the **transparent / held-out case #7916's own thread is already debating** (darksylinc, thygrrr,
+> QbieShay), brought to its owners as a companion, **not a competing standalone fork**. The honest first step is to
+> ask the #7916 maintainers (reduz / clayjohn / BastiaanOlij) whether B∧C∧D belongs inside #7916 or alongside it,
+> before any PR.
 > Supporting analysis lives in this repo: `render-to-compositor-interface-design.md` (interface),
-> `research-compositor-extension-points.md` (engine seams), `research-community-demand.md` (demand evidence).
+> `research-compositor-extension-points.md` (engine seams), `research-community-demand.md` (demand evidence),
+> `adversarial-review-subviewport.md` + `adversarial-review-narrowed.md` (the attacks this survived, and how it
+> was narrowed by them — incl. the #7916 primary-source read).
 
 ---
 
@@ -52,10 +58,13 @@ This dissolves the wall: a material shades *itself* into the target the effect r
 lines of hand-synced GLSL with a property and a target declaration. Because opt-in is a **per-instance
 property** (not a shader `render_mode`), **any material participates unchanged — including `StandardMaterial3D`
 — with no shader authoring**, which is what makes it a general render-layer primitive rather than a shader
-trick. It is deliberately the **transparent / render-layer counterpart of #7916**: reuse that proposal's
+trick. It is deliberately shaped as the **transparent / held-out case of #7916**: reuse that proposal's
 conventions where they compose (compositor-declared enumerated-format buffers, the `CUSTOM_BUFFER0..N`
-aux-output vocabulary), fill the seam it declared out of scope (caller-ordered, held-out, transparent-capable
-layers into named targets).
+aux-output vocabulary), and address the transparent/held-out layer that #7916's *own reviewers already asked for*
+(darksylinc: "one strong point of compositors is that you can fix the limitations of regular alpha blending…";
+thygrrr: "should most definitely not be limited to opaque passes only") but that its OP set aside. The framing
+is companion-to-#7916, not rival: the buffer/format/aux-output surface is #7916's; the new part is the held-out,
+caller-ordered list feeding a named target.
 
 ## Describe how your proposal will work (API, pseudo-code, diagrams)
 
@@ -98,13 +107,30 @@ class_name CompositorRenderLayer extends Resource
 @export var seed_source : SeedSource = SeedSource.CLEAR        # CLEAR | SCENE_COLOR | a bound Texture — the generalized seed
 @export var stage       : CompositorEffect.EffectCallbackType = EFFECT_CALLBACK_TYPE_POST_TRANSPARENT
 # Structural INVARIANTS, not fields (they define the holdout layer; exposing them as knobs would only shallow it):
-#   • depth-test vs the resolved scene depth, depth-WRITE forced off   • size matches the render target
-#   • view_count matches the scene (multiview)                         • post-resolve stage ⇒ single-sample
+#   • view_count matches the scene (multiview)   • size matches the render target   • post-resolve stage ⇒ single-sample
+# Held-out DEPTH — a STATED LIMITATION, not an unqualified invariant:
+#   held-out instances depth-TEST vs the resolved scene depth (so the real scene occludes them), but do NOT write
+#   depth. Consequence: held-out instances do NOT depth-occlude ONE ANOTHER — within a layer they composite in
+#   pure caller/painter order (§2). This is correct for painter-safe geometry (fold planes, decals, flat panels)
+#   and WRONG for self-overlapping opaque meshes. v1 targets the painter-safe case; an optional own-depth mode
+#   (layer depth seeded from scene depth, giving both scene-occlusion AND self-occlusion) is a named future
+#   extension, not shipped in v1. See adversarial-review-narrowed.md, Attack #5.
 ```
 
 `seed_source` is the generalization the fork lacked: the layer is not forced to start from "the main scene after
 opaque." It starts from whatever you bind — `CLEAR`, the resolved `SCENE_COLOR`, or an arbitrary `Texture`
-(another effect's output, a SubViewport). The effect declares the layers it produces as an **exported property**
+(another effect's output, a SubViewport).
+
+> **`seed_source` and the effect's composite op are coupled — chosen together, not independently.** `SCENE_COLOR`
+> is coherent only when the effect **replaces/samples** the scene with the layer (the fold: the layer *becomes* the
+> displayed image, so no double-count). If the effect instead composites the layer **over/additively** onto the
+> scene, `SCENE_COLOR` **double-exposes** the scene (baked into the seed *and* composited over the real scene), and
+> without a coverage channel the effect cannot tell "seed pixels" from "held-out pixels." Therefore **v1 ships
+> `CLEAR` and bound-`Texture` seeds; `SCENE_COLOR` is gated behind engine-written coverage** (the minimal
+> `CUSTOM_BUFFER` step, §3) so the effect can mask held-out pixels — it is *not* offered as a free knob alongside an
+> arbitrary composite. See adversarial-review-narrowed.md, Attack #3.
+
+The effect declares the layers it produces as an **exported property**
 (matching the existing `CompositorEffect` house style — `access_resolved_color`, `needs_motion_vectors` … are all
 bound properties, and `Compositor.compositor_effects` is itself a `TypedArray` property), and reads by handing back
 the **same resource object** — never a string, never a global slot index:
@@ -118,7 +144,12 @@ func _render_callback(stage: int, render_data: RenderData) -> void:
 ```
 
 The only new `GDVIRTUAL` stays `_render_callback` (the existing one); declaration is a property, read is a bound
-method callable from the callback — no per-frame GDScript dispatch on the render thread. This is the current
+method callable from the callback — no per-frame GDScript dispatch on the render thread. **This lifecycle is
+verified against source (Attack #6):** CompositorEffect properties are *live-read every frame*, never cached at a
+registration snapshot (`renderer_scene_render_rd.cpp:257-278`, polled in fill `render_forward_clustered.cpp:1731-1733`),
+and NTKey named textures allocate on-demand on first access (`render_scene_buffers_rd.cpp:328-351`). So an exported
+`render_layers` property drives per-frame, keyed allocation cleanly — there is **no chicken-and-egg** between
+property-set (often in `_init()`) and the engine reading it, even if set after the effect joins a `Compositor`. This is the current
 design's typed-target idea **slimmed from a seven-field policy monster to a two-field identity token**: the order
 key moves to the instance (§2); depth-source/write, size, and multiview become structural invariants; and the
 compositor gains exactly **one** accessor (`get_layer_texture`) — as close to "pure consumer" as possible, since an
@@ -153,7 +184,7 @@ A material that wants to write more than color into the layer (coverage / weight
 `render_mode` and writes `CUSTOM_BUFFER0..N`, exactly as #7916 proposes. **v1 ships without this** — coverage,
 where a client needs it, is an engine-written side attachment, so no shader-language change is required yet.
 
-### Engine implementation sketch (Forward+ shown; Mobile mirrors)
+### Engine implementation sketch (Forward+; Mobile is a *different* pass, not a mirror)
 
 - New `RENDER_LIST_COMPOSITOR_LAYER` sibling of `RENDER_LIST_ALPHA` (`render_forward_clustered.h:79-83`); a
   fill-branch routes instances with a non-null `render_layer` into it and out of opaque/alpha.
@@ -161,6 +192,17 @@ where a client needs it, is an engine-written side attachment, so no shader-lang
 - At each compositor stage dispatch, before the effects for that stage run, the renderer seeds each layer's
   framebuffer per its `seed_source`, then draws that layer's list into it — depth-test vs resolved scene depth,
   depth-write masked off. The framebuffer is the engine-allocated texture keyed by the layer resource's identity.
+
+**Renderer scope — honestly Forward+-first, not "both RD renderers for free."** A deferred held-out pass into a
+*separate* target is a natural fit for Forward+ (Clustered), which never uses subpasses: it resolves MSAA, then
+runs `POST_TRANSPARENT` on resolved scene-linear color/depth (`render_forward_clustered.cpp:2436-2459`, tonemap
+`:2551`) — exactly the context this pass needs. **Mobile is not a mirror.** Mobile renders opaque+sky+transparent+
+tonemap as *subpasses of one framebuffer* (`render_forward_mobile.cpp:1224-1318`); a separate-target pass cannot
+be a subpass, and Mobile already **drops its subpass fast-path** whenever a PRE/POST_TRANSPARENT effect is present
+(`render_forward_mobile.cpp:891-903`). So on Mobile this pass either forces the renderer off its tile-based fast
+path or runs in **display-space post-tonemap** color — materially different from Forward+'s scene-linear input.
+**v1 targets Forward+;** Mobile is a follow-up with its own design (and its own perf caveat), not a claimed
+mirror. See adversarial-review-narrowed.md, Attack #4.
 
 ## If this enhancement will not be used often, can it be worked around with a few lines of script?
 
@@ -206,9 +248,11 @@ renderers, a typed layer above `RenderSceneBuffersRD`'s named-texture store, and
 
 - **One small primitive, many clients.** The use-cases above are *clients*, not baked-in features. No orthogonal
   knob explosion.
-- **RD-renderers only, capability-gated.** Compositor is Forward+/Mobile only; `gl_compatibility` cannot dispatch
-  compositor callbacks (`rasterizer_scene_gles3.h:152`). Registration **hard-fails** (naming the renderer) on
-  unsupported renderers/stages — never warn-and-corrupt.
+- **Forward+ first; RD-only, capability-gated.** The compositor is Forward+/Mobile only (`gl_compatibility`
+  cannot dispatch compositor callbacks, `rasterizer_scene_gles3.h:152`), and within that, **v1 is Forward+**: a
+  deferred held-out pass is structurally hostile to Mobile's subpass chain (see engine sketch / Attack #4), so
+  Mobile is a follow-up, not a free mirror. Registration **hard-fails** (naming the renderer) on unsupported
+  renderers/stages — never warn-and-corrupt.
 - **MSAA is explicit, not warned.** A layer whose `stage` is post-resolve is single-sample (its geometry is
   composited after the scene resolve); a layer declaring a pre-resolve stage inherits scene MSAA samples. Stated,
   chosen by the author via the `stage` field, never silent.
@@ -222,21 +266,45 @@ renderers, a typed layer above `RenderSceneBuffersRD`'s named-texture store, and
 
 1. **Opt-in on the instance, not a material directive** — because holdout is a per-instance routing decision, and
    this is what lets any `StandardMaterial3D` mesh participate without a shader.
+   **Why this does not break #7916's GPU-driven-rendering constraint** (the objection this most invites — #7916
+   chose material-based pass assignment precisely because it "remains entirely compatible with GPU driven rendering,
+   where materials are dispatched instead of geometry"): our `render_layer` is a **per-instance visibility/routing
+   attribute consumed at cull/fill time** — the same stage where a GPU-driven pipeline already does per-instance
+   work (frustum/occlusion culling, list building). It selects *which draw list* an instance lands in; it is **not a
+   shader permutation and does not fragment material dispatch** — a held-out `StandardMaterial3D` still dispatches
+   through the one `StandardMaterial3D` pipeline, merely into a different list. #7916's constraint is about not
+   forcing *per-object shader/pass state* that a material-dispatched GPU pipeline can't resolve; a per-instance list
+   tag carried in the instance buffer is orthogonal to that and, if anything, *more* GPU-driven-native than a
+   `render_mode` (which is a shader-permutation axis). This must be confirmed with the #7916 owners, but the
+   mechanism is compatible-by-construction, not a contradiction.
 2. **Identity-resource layers, not indexed buffers** — the layer is addressed by a shared `CompositorRenderLayer`
    object reference (§1), so N independent effects/plugins coexist without colliding on a flat global slot space (a
    limitation #7916 itself carries for its 4 buffers), and the producer↔consumer binding is one editor-checkable
-   symbol rather than a hand-typed string or a slot number.
+   symbol rather than a hand-typed string or a slot number. **This aligns with #7916's own top-voted feedback**
+   (darksylinc, +28: "4 textures is nowhere near enough… hashed strings are a much more user-friendly way here")
+   — the divergence moves *toward* what #7916's reviewers asked for, not away.
 
 ### Anticipated upstream objections (and how this proposal answers them)
 
 The rendering-team concerns this most likely trips, stated plainly so they can be argued rather than discovered:
 
-1. **"This overlaps #7916 — reconcile or wait."** The biggest risk. #7916 owns the custom-buffer/AOV design space
-   and is "needs consensus." This proposal is deliberately the **transparent / held-out counterpart** #7916 declared
-   out of scope, and it *reuses* #7916's conventions (enumerated formats, the `CUSTOM_BUFFER0..N` aux-output
-   vocabulary) rather than inventing rivals — diverging only on identity-vs-index, with an argued reason. **Ask
-   before building:** the honest sequencing is to confirm with the #7916 owners whether this belongs *inside* #7916
-   or *alongside* it, before any PR. A likely-acceptable outcome is "accepted in principle, landed in #7916's orbit."
+1. **"This overlaps #7916 — reconcile or wait."** The biggest risk, and after reading #7916's full thread the
+   honest posture is **"bring this to #7916, do not file it as a standalone rival."** #7916 (OPEN, 193 👍, only its
+   `CompositorEffect` sub-part shipped) owns the custom-buffer/AOV design space and is still unsettled. Crucially,
+   the transparent/held-out case is **not** abandoned territory — it is *actively contested inside #7916's own
+   thread*: darksylinc (+28) "extreme disagree" with the OP's transparent dismissal, thygrrr "should most
+   definitely not be limited to opaque passes," QbieShay "pass index should be overridable per-object." So this
+   proposal is the companion that answers those in-thread requests, reusing #7916's conventions (enumerated formats,
+   `CUSTOM_BUFFER0..N`) and diverging only where #7916's *own* feedback points (identity/hashed names over a flat
+   4-slot index — darksylinc again). **Sequencing:** confirm with the #7916 owners (reduz / clayjohn / BastiaanOlij)
+   whether B∧C∧D lands *inside* #7916 or *alongside* it, **before any PR**. The realistic best outcome is "accepted
+   in principle, landed in #7916's orbit" — and the proposal is written to make that the default, not a fallback.
+
+1b. **"Per-instance opt-in breaks the GPU-driven-rendering plan."** The specific technical objection the #7916 OP
+   is most likely to raise (he chose material-based pass assignment *for* GPU-driven compatibility). Answered in
+   "Deliberate divergences" #1: `render_layer` is a per-instance cull/fill-time routing tag, not a shader
+   permutation; it changes *which list* an instance draws in, not how its material dispatches, so it is orthogonal
+   to material-dispatched GPU-driven rendering. Flagged here explicitly so it is argued, not discovered.
 
 2. **"The compositor must not draw meshes."** `CompositorEffect` (#80214) was built consumer-only and DrawList-from-
    effect access was declined (#13405/#13406, closed). This proposal does **not** make the compositor draw geometry:
