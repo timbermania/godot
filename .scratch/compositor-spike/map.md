@@ -211,6 +211,20 @@ NOT `--headless`; `scons platform=linuxbsd target=editor dev_build=yes -j24`).
   doctool zero-drift, idempotent. Verified `/tmp/step7-check`: accessor returns the member-drawn target
   (`255,0,0,255`) **and equals** the render-side string-path RID; render_layers round-trips; mobile gate =
   false. **Engine remaining = ticket 13 only.**
+- [Build · seed: real `TEXTURE` seed source](issues/13-build-texture-seed-source.md) — **built + verified
+  windowed; the engine primitive is now COMPLETE.** Added `seed_texture : Texture2D` to
+  `CompositorRenderLayer`; extended the Step-6 push-down `FUNC5`→`FUNC6` so the seed's *RenderingServer* RID
+  is resolved main-thread and the render thread resolves it to the **current RD texture at pass time**
+  (`texture_get_rd_texture`) — a live per-frame `Texture2DRD` works with no re-push; the render thread still
+  never derefs the Resource. Gave the target `CAN_COPY_TO`; the pass now, for `SEED_SOURCE_TEXTURE`,
+  **verifies format+size+layers match** (ticket-11 structural check), `texture_copy`s the seed into the
+  engine-owned target per view, then draws members with **LOAD** (`DRAW_DEFAULT_ALL`) instead of clear.
+  Missing/mismatched texture and the deferred `SCENE_COLOR` **warn-once + fall back to CLEAR** (never draw
+  over garbage); `SCENE_COLOR` stays a documented v2 extension, no engine path. Verified `/tmp/step13-check`:
+  member draws left-half only → left `255,0,0,255` (member over seed = LOAD), right `0,255,0,255` (copied
+  seed survived = would be `0,0,0,0` on CLEAR); mismatch→CLEAR guard confirmed. 14 files, +102/−24; build 50s;
+  comparator 5/5; doctool zero-drift. **Handoff to 15:** game Pass A must author a `Texture2DRD`
+  (CAN_COPY_FROM, internal size, format matching `fold_layer.tres`) bound once as `seed_texture`.
 
 ## Not yet specified
 
@@ -220,16 +234,17 @@ NOT `--headless`; `scons platform=linuxbsd target=editor dev_build=yes -j24`).
   built: comparator, `compositor_layer` render_mode, `CompositorRenderLayer` resource + engine-owned target,
   per-instance membership + fill routing, the held-out pass (first pixels), FFT-policy strip + render-thread
   hardening, and now the public consumer surface (`render_layers` / `get_layer_texture` /
-  `is_compositor_layer_supported`) + class-ref docs. **The only remaining engine work is ticket 13** (the
-  `TEXTURE` seed, tracked in its own fog line below). Historical note: Step 11 landed the render-thread
-  hardening, so 12 was the last of the seven — the PR surface
-  is complete.
-- **`TEXTURE` seed source** — GRADUATED (2026-08-01, ticket 03) into engine ticket **13**, and promoted from
-  fast-follow to **critical path** (the FFT proof's sub/mix modes require the display-space seed). `SCENE_COLOR`
-  ruled out of the engine (documented v2 extension only, not a ticket).
+  `is_compositor_layer_supported`) + class-ref docs, **plus the `TEXTURE` seed source (ticket 13).**
+  **ALL ENGINE WORK IS DONE — no engine tickets remain open.** Historical note: Step 11 landed the
+  render-thread hardening, so 12 was the last of the *seven*, and 13 (the seed) closed the primitive.
+- **`TEXTURE` seed source** — GRADUATED (2026-08-01, ticket 03) into engine ticket **13**, promoted to
+  **critical path** (the FFT proof's sub/mix modes require the display-space seed), **now RESOLVED**
+  (2026-08-01): the engine copies a bound (live-updatable) `Texture2DRD` into the target and LOADs it under
+  the held-out members. `SCENE_COLOR` ruled out of the engine (documented v2 extension only, not a ticket).
 - **Migrate the game fold onto the new primitive** — GRADUATED (2026-08-01, ticket 03) into game tickets **14**
   (membership flip + int order key + shader rename + routing tests; writable now, blocked by 07/08/09) and **15**
-  (Pass A/C retarget + seed-texture wiring + autopilot gate; blocked by 13 + 14 → first game-scene pixels).
+  (Pass A/C retarget + seed-texture wiring + autopilot gate → first game-scene pixels; **13 now resolved, so
+  15 waits only on 14**). Both game tickets 14 + 15 are the sole open work left on the map.
 - **Build/run recipe for the game against the new engine** (analogue of `spike-fold-run-invocation`) — folded into
   ticket **15** (documented + saved as a memory note once the fold renders windowed).
 - **Capture the DEMI2 A/B proof** (ticket 04 defined it; `plans/04-demi2-proof-handoff.md`) — graduates once the
