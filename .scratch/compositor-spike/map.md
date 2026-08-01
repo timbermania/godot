@@ -121,13 +121,24 @@ NOT `--headless`; `scons platform=linuxbsd target=editor dev_build=yes -j24`).
   mode errors; Mobile parses it AND fires the "Forward+ only" WARN. **Reusable:** `--rendering-method
   mobile` on one project exercises the Mobile path (no separate project); parse-check harness kept at
   `/tmp/step2-check/`. Uncommitted working-tree change.
+- [Build · Step 3: `CompositorRenderLayer : Resource` + engine-owned allocation](issues/08-build-render-layer-resource.md) —
+  **built + verified.** New `CompositorRenderLayer : Resource` — three declared fields only (`format`
+  [#7916 set], `seed_source` [CLEAR/TEXTURE ship, SCENE_COLOR deferred], `stage`); no RID, no policy bag —
+  registered in `register_scene_types.cpp`. Engine-owned target via
+  `RenderSceneBuffersRD::get_compositor_layer_texture(id, RD::DataFormat)`: allocate-on-first-access under
+  new scope `RB_SCOPE_COMPOSITOR_LAYER`, **reusing the existing NamedTexture store** (freed by `cleanup()`
+  for free); size/view_count are structural invariants. Full class-ref XML (doctool: zero drift). 5 files.
+  **Q2 resolved:** key on `get_instance_id()` (ObjectID) — a `CompositorRenderLayer` has no server RID.
+  Tests 4/4, 9 assertions; build clean 32s. **Handoff to Step 4/5:** accessor compiled but uncalled (Step 5
+  wires it → first pixels); Format→`RD::DataFormat` mapping is the caller's job, resolving
+  `INHERIT_SCENE_COLOR` to `get_base_data_format()`. Uncommitted working-tree change.
 
 ## Not yet specified
 
 <!-- in-scope fog; graduates as tickets resolve -->
 - **Build the engine primitive** — GRADUATED (2026-07-31, ticket 02) into 7 task tickets **06–12** (Steps
-  1–7). **06 + 07 resolved.** Build frontier = **08** (no deps); 09 blocked-by 06+07+08 (06+07 now done,
-  waits only on 08); 10 by 09; 11 & 12 by 10.
+  1–7). **06 + 07 + 08 resolved.** Build frontier = **09** (deps 06+07+08 all met — per-instance
+  `render_layer`/`render_layer_order` props + fill routing + new render list); 10 by 09; 11 & 12 by 10.
 - **Migrate the game fold onto the new primitive** (the game-side edits) — graduates once the
   migration plan (ticket 03) lands.
 - **Build/run recipe for the game against the new engine** (analogue of `spike-fold-run-invocation`
