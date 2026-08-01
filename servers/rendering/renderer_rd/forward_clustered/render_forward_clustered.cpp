@@ -943,9 +943,10 @@ void RenderForwardClustered::_fill_render_list(RenderListType p_render_list, con
 	if (!p_append) {
 		rl->clear();
 		if (p_render_list == RENDER_LIST_OPAQUE) {
-			// Opaque fills motion and alpha lists.
+			// Opaque fills motion, alpha, and compositor-layer lists.
 			render_list[RENDER_LIST_MOTION].clear();
 			render_list[RENDER_LIST_ALPHA].clear();
+			render_list[RENDER_LIST_COMPOSITOR_LAYER].clear();
 		}
 	}
 
@@ -1142,21 +1143,32 @@ void RenderForwardClustered::_fill_render_list(RenderListType p_render_list, con
 					force_alpha = true;
 				}
 
-				if (!force_alpha && (surf->flags & (GeometryInstanceSurfaceDataCache::FLAG_PASS_DEPTH | GeometryInstanceSurfaceDataCache::FLAG_PASS_OPAQUE))) {
-					rl->add_element(surf);
-				}
-
-				if (force_alpha || (surf->flags & GeometryInstanceSurfaceDataCache::FLAG_PASS_ALPHA)) {
-					surf->color_pass_inclusion_mask = COLOR_PASS_FLAG_TRANSPARENT;
-					render_list[RENDER_LIST_ALPHA].add_element(surf);
-					if (uses_gi) {
-						surf->sort.uses_forward_gi = 1;
-					}
-				} else if (p_using_motion_pass && (uses_motion || (surf->flags & GeometryInstanceSurfaceDataCache::FLAG_USES_MOTION_VECTOR))) {
-					surf->color_pass_inclusion_mask = COLOR_PASS_FLAG_MOTION_VECTORS;
-					render_list[RENDER_LIST_MOTION].add_element(surf);
-				} else {
+				// Compositor render-layer members are pulled out of the normal opaque/alpha/motion
+				// passes and collected into an isolated, engine-owned list that a CompositorEffect
+				// consumes (drawn by the held-out pass, Step 5). They still shade through their real
+				// material; the engine only retargets where the output lands. Membership =
+				// `render_mode compositor_layer` (a batch-safe shader permutation) AND a valid
+				// per-instance render_layer identity.
+				if (surf->shader != nullptr && surf->shader->compositor_layer && inst->render_layer.is_valid()) {
 					surf->color_pass_inclusion_mask = 0;
+					render_list[RENDER_LIST_COMPOSITOR_LAYER].add_element(surf);
+				} else {
+					if (!force_alpha && (surf->flags & (GeometryInstanceSurfaceDataCache::FLAG_PASS_DEPTH | GeometryInstanceSurfaceDataCache::FLAG_PASS_OPAQUE))) {
+						rl->add_element(surf);
+					}
+
+					if (force_alpha || (surf->flags & GeometryInstanceSurfaceDataCache::FLAG_PASS_ALPHA)) {
+						surf->color_pass_inclusion_mask = COLOR_PASS_FLAG_TRANSPARENT;
+						render_list[RENDER_LIST_ALPHA].add_element(surf);
+						if (uses_gi) {
+							surf->sort.uses_forward_gi = 1;
+						}
+					} else if (p_using_motion_pass && (uses_motion || (surf->flags & GeometryInstanceSurfaceDataCache::FLAG_USES_MOTION_VECTOR))) {
+						surf->color_pass_inclusion_mask = COLOR_PASS_FLAG_MOTION_VECTORS;
+						render_list[RENDER_LIST_MOTION].add_element(surf);
+					} else {
+						surf->color_pass_inclusion_mask = 0;
+					}
 				}
 
 				if (uses_lightmap) {
@@ -1916,6 +1928,7 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 	render_list[RENDER_LIST_OPAQUE].sort_by_key();
 	render_list[RENDER_LIST_MOTION].sort_by_key();
 	render_list[RENDER_LIST_ALPHA].sort_by_reverse_depth_and_priority();
+	render_list[RENDER_LIST_COMPOSITOR_LAYER].sort_by_layer_order(); // caller order (render_layer_order), never camera depth
 
 	int *render_info = p_render_data->render_info ? p_render_data->render_info->info[RSE::VIEWPORT_RENDER_INFO_TYPE_VISIBLE] : (int *)nullptr;
 	_fill_instance_data(RENDER_LIST_OPAQUE, render_info);

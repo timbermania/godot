@@ -36,6 +36,7 @@ STATIC_ASSERT_INCOMPLETE_TYPE(class, RenderingServer);
 #include "core/object/class_db.h"
 #include "core/os/os.h"
 #include "scene/main/scene_tree.h"
+#include "scene/resources/compositor_render_layer.h"
 #include "scene/resources/material.h"
 #include "servers/rendering/rendering_server.h"
 
@@ -400,6 +401,24 @@ float GeometryInstance3D::get_lod_bias() const {
 	return lod_bias;
 }
 
+void GeometryInstance3D::set_render_layer(const Ref<CompositorRenderLayer> &p_render_layer) {
+	render_layer = p_render_layer;
+	RS::get_singleton()->instance_geometry_set_render_layer(get_instance(), render_layer.is_valid() ? render_layer->get_instance_id() : ObjectID(), render_layer_order);
+}
+
+Ref<CompositorRenderLayer> GeometryInstance3D::get_render_layer() const {
+	return render_layer;
+}
+
+void GeometryInstance3D::set_render_layer_order(int p_order) {
+	render_layer_order = p_order;
+	RS::get_singleton()->instance_geometry_set_render_layer(get_instance(), render_layer.is_valid() ? render_layer->get_instance_id() : ObjectID(), render_layer_order);
+}
+
+int GeometryInstance3D::get_render_layer_order() const {
+	return render_layer_order;
+}
+
 void GeometryInstance3D::set_instance_shader_parameter(const StringName &p_name, const Variant &p_value) {
 	if (p_value.get_type() == Variant::NIL) {
 		Variant def_value = RS::get_singleton()->instance_geometry_get_shader_parameter_default_value(get_instance(), p_name);
@@ -582,6 +601,11 @@ void GeometryInstance3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_extra_cull_margin", "margin"), &GeometryInstance3D::set_extra_cull_margin);
 	ClassDB::bind_method(D_METHOD("get_extra_cull_margin"), &GeometryInstance3D::get_extra_cull_margin);
 
+	ClassDB::bind_method(D_METHOD("set_render_layer", "render_layer"), &GeometryInstance3D::set_render_layer);
+	ClassDB::bind_method(D_METHOD("get_render_layer"), &GeometryInstance3D::get_render_layer);
+	ClassDB::bind_method(D_METHOD("set_render_layer_order", "order"), &GeometryInstance3D::set_render_layer_order);
+	ClassDB::bind_method(D_METHOD("get_render_layer_order"), &GeometryInstance3D::get_render_layer_order);
+
 	ClassDB::bind_method(D_METHOD("set_lightmap_texel_scale", "scale"), &GeometryInstance3D::set_lightmap_texel_scale);
 	ClassDB::bind_method(D_METHOD("get_lightmap_texel_scale"), &GeometryInstance3D::get_lightmap_texel_scale);
 
@@ -610,6 +634,8 @@ void GeometryInstance3D::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::AABB, "custom_aabb", PROPERTY_HINT_NONE, "suffix:m"), "set_custom_aabb", "get_custom_aabb");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_bias", PROPERTY_HINT_RANGE, "0.001,128,0.001"), "set_lod_bias", "get_lod_bias");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "ignore_occlusion_culling"), "set_ignore_occlusion_culling", "is_ignoring_occlusion_culling");
+	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "render_layer", PROPERTY_HINT_RESOURCE_TYPE, "CompositorRenderLayer"), "set_render_layer", "get_render_layer");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "render_layer_order"), "set_render_layer_order", "get_render_layer_order");
 
 	ADD_GROUP("Global Illumination", "gi_");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "gi_mode", PROPERTY_HINT_ENUM, "Disabled,Static,Dynamic"), "set_gi_mode", "get_gi_mode");

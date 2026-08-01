@@ -37,6 +37,7 @@
 #include "servers/rendering/renderer_rd/effects/motion_vectors_store.h"
 #include "servers/rendering/renderer_rd/effects/ss_effects.h"
 #include "servers/rendering/renderer_rd/effects/taa.h"
+#include "servers/rendering/renderer_rd/forward_clustered/compositor_layer_order_sort.h"
 #include "servers/rendering/renderer_rd/forward_clustered/scene_shader_forward_clustered.h"
 #include "servers/rendering/renderer_rd/renderer_scene_render_rd.h"
 #include "servers/rendering/renderer_rd/shaders/forward_clustered/best_fit_normal.glsl.gen.h"
@@ -80,6 +81,7 @@ class RenderForwardClustered : public RendererSceneRenderRD {
 		RENDER_LIST_MOTION, //used for opaque objects with motion
 		RENDER_LIST_ALPHA, //used for transparent objects
 		RENDER_LIST_SECONDARY, //used for shadows and other objects
+		RENDER_LIST_COMPOSITOR_LAYER, //members of `render_mode compositor_layer` with a valid render_layer, drawn into an engine-owned target a CompositorEffect consumes
 		RENDER_LIST_MAX
 	};
 
@@ -406,7 +408,7 @@ private:
 		uint32_t max_lightmaps;
 		RID lightmap_buffer;
 
-		MultiUmaBuffer<1u> instance_buffer[RENDER_LIST_MAX] = { MultiUmaBuffer<1u>("RENDER_LIST_OPAQUE"), MultiUmaBuffer<1u>("RENDER_LIST_MOTION"), MultiUmaBuffer<1u>("RENDER_LIST_ALPHA"), MultiUmaBuffer<1u>("RENDER_LIST_SECONDARY") };
+		MultiUmaBuffer<1u> instance_buffer[RENDER_LIST_MAX] = { MultiUmaBuffer<1u>("RENDER_LIST_OPAQUE"), MultiUmaBuffer<1u>("RENDER_LIST_MOTION"), MultiUmaBuffer<1u>("RENDER_LIST_ALPHA"), MultiUmaBuffer<1u>("RENDER_LIST_SECONDARY"), MultiUmaBuffer<1u>("RENDER_LIST_COMPOSITOR_LAYER") };
 		InstanceData *curr_gpu_ptr[RENDER_LIST_MAX] = {};
 
 		LightmapCaptureData *lightmap_captures = nullptr;
@@ -729,6 +731,32 @@ private:
 
 			SortArray<GeometryInstanceSurfaceDataCache *, SortByReverseDepthAndPriority> sorter;
 			sorter.sort(elements.ptr(), elements.size());
+		}
+
+		// Reorders this list into the caller's compositor render-layer order: ascending
+		// `render_layer_order`, stable on ties (submission index). The order key is a pure
+		// CPU-side sort input — never uploaded to the GPU. See compositor_layer_order_sort.h.
+		void sort_by_layer_order() {
+			const uint32_t size = elements.size();
+			if (size < 2) {
+				return;
+			}
+			LocalVector<int32_t> orders;
+			orders.resize(size);
+			for (uint32_t i = 0; i < size; i++) {
+				orders[i] = elements[i]->owner->render_layer_order;
+			}
+			LocalVector<uint32_t> order;
+			order.resize(size);
+			compute_order(order.ptr(), orders.ptr(), size);
+			LocalVector<GeometryInstanceSurfaceDataCache *> sorted;
+			sorted.resize(size);
+			for (uint32_t i = 0; i < size; i++) {
+				sorted[i] = elements[order[i]];
+			}
+			for (uint32_t i = 0; i < size; i++) {
+				elements[i] = sorted[i];
+			}
 		}
 
 		_FORCE_INLINE_ void add_element(GeometryInstanceSurfaceDataCache *p_element) {
