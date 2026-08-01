@@ -238,6 +238,23 @@ NOT `--headless`; `scons platform=linuxbsd target=editor dev_build=yes -j24`).
   reverse-subtracts *color*), so coverage accumulates from the shaders' existing ALPHA>0 — no functional shader change, just
   corrected the stale "engine forces ADD/ONE/ONE" comments; pixel-proof deferred to 15. **NOT touched (ticket 15):**
   `FoldSurface.gd`'s `&"compositor_fold"` scratch string. 48 files, uncommitted.
+  ⚠️ **D4 CORRECTED by ticket 15:** the claim "Godot maps alpha_blend_op=ADD for add/sub/mix" is **false for
+  blend_sub** — `material_storage.cpp` `BLEND_MODE_SUB` uses `alpha_blend_op=REVERSE_SUBTRACT`, so subtractive
+  coverage-alpha subtracts to 0 and Pass C discarded it (sub folds vanished). Fixed in 15 (seed-alpha baseline).
+- [Migrate · Pass A/C retarget + seed-texture wiring + run recipe + autopilot gate](issues/15-migrate-passac-retarget-runrecipe.md) —
+  **RESOLVED (build + verified windowed); the fold renders in a real FFT scene, add + sub + mix all correct against
+  the display-space seed. THE DESTINATION'S ENGINE+GAME BUILD IS COMPLETE.** Pass A authors the display-space seed
+  into a game-owned `Texture2DRD` bound as `fold_layer.tres` `seed_texture` (engine copies it in + LOADs, ticket 13);
+  Pass C reads the engine-owned target via `get_layer_texture(Fold.FOLD_LAYER)`; autopilot feature-detects
+  `is_compositor_layer_supported()`. **Two implementation-forced corrections:** (1) **layer format A2B10G10R10 →
+  RGBA8** — a game-authored `Texture2DRD` can't wrap A2B10G10R10 (no `Image::Format`); RGBA8_UNORM matches the
+  engine mapping, keeps PSX saturation (UNORM), 8-bit coverage, fidelity-equal after RGB555. (2) **subtractive
+  coverage fix** — Godot `blend_sub` uses `alpha_blend_op=REVERSE_SUBTRACT` (sub drove coverage-α→0 → Pass C
+  discarded it; corrects ticket-14 D4). Fix = **userland** (user: "most palatable upstream", engine stays minimal):
+  seed coverage-α to a **0.5 baseline**, resolve gates on **deviation** (`abs(s.a-0.5)<=0.1`); RGB path untouched so
+  the ticket-04 proof is byte-identical. Verified via new controlled guard `tools/probe_ticket15_roundtrip.gd --
+  add|sub|mix` (all PASS) + real Formation scene (clean). Run recipe + `.glsl` reimport gotcha → memory
+  `compositor-fold-game-run-invocation`. 5 files (+127/−53), **uncommitted**.
 
 ## Not yet specified
 
@@ -255,16 +272,18 @@ NOT `--headless`; `scons platform=linuxbsd target=editor dev_build=yes -j24`).
   (2026-08-01): the engine copies a bound (live-updatable) `Texture2DRD` into the target and LOADs it under
   the held-out members. `SCENE_COLOR` ruled out of the engine (documented v2 extension only, not a ticket).
 - **Migrate the game fold onto the new primitive** — GRADUATED (2026-08-01, ticket 03) into game tickets **14**
-  (membership flip + int order key + shader rename + routing tests; **RESOLVED 2026-08-01** — full migration, all
-  17 shaders renamed, 2-site opt-in via `Fold.add`/`EngineFoldCompositor`, `fold_layer.tres` created, tests + guards
-  green headless) and **15** (Pass A/C retarget + seed-texture wiring + autopilot gate → first game-scene pixels).
-  **With 13 + 14 both resolved, ticket 15 is now UNBLOCKED and is the sole open ticket on the map** — the last build
-  step before the destination. The frame is intentionally half-migrated after 14: carriers are held out into the
-  engine-owned target while Pass A/C still use the old magic-string scratch, so nothing renders until 15.
-- **Build/run recipe for the game against the new engine** (analogue of `spike-fold-run-invocation`) — folded into
-  ticket **15** (documented + saved as a memory note once the fold renders windowed).
-- **Capture the DEMI2 A/B proof** (ticket 04 defined it; `plans/04-demi2-proof-handoff.md`) — graduates once the
-  migrated game runs on the new engine (after 14 + 15). User runs it from the game repo; not yet a ticket.
+  (membership flip + int order key + shader rename + routing tests; **RESOLVED**) and **15** (Pass A/C retarget +
+  seed-texture wiring + autopilot gate; **RESOLVED 2026-08-01** — the fold renders in a real FFT scene, add + sub +
+  mix all correct against the display-space seed, verified windowed). **BOTH RESOLVED — the engine+game build is
+  DONE; no build tickets remain open.** (Corrections landed in 15: layer format → RGBA8; subtractive coverage via a
+  seed-alpha baseline. Game changes are **uncommitted**.)
+- **Build/run recipe for the game against the new engine** — DONE (ticket 15): saved as memory note
+  `compositor-fold-game-run-invocation` (windowed + forward_plus; `.glsl` needs a `--editor --quit` reimport).
+- **Capture the DEMI2 A/B proof** (ticket 04 defined it; `plans/04-demi2-proof-handoff.md`) — **NOW UNBLOCKED**
+  (14 + 15 resolved). This is the **sole remaining in-scope step before the destination**: the user runs the
+  single-held-particle A/B fold-color audit from the game repo and confirms the measured additive diff is faithful
+  vs the PCSX oracle. Not yet a ticket (user-run). Verified additive RGB is byte-identical to pre-migration, so the
+  proof method is undisturbed. The `tools/probe_ticket15_roundtrip.gd` guard already confirms add/sub/mix render.
 - **Restore the "working fork proves it" line** to `docs/sounding-7916-comment-draft.md` — graduates
   once the DEMI2 A/B diff comes back faithful (the last in-scope step before the destination).
 
