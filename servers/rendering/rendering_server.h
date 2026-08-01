@@ -771,7 +771,7 @@ public:
 	// Compositor render-layer membership. `p_format`/`p_seed_source` are the member's CompositorRenderLayer
 	// config resolved to plain enum values on the main thread, so the render thread never dereferences the
 	// (main-thread-owned) resource. See RenderForwardClustered's held-out pass.
-	virtual void instance_geometry_set_render_layer(RID p_instance, ObjectID p_layer_id, int32_t p_render_layer_order, int32_t p_format, int32_t p_seed_source) = 0;
+	virtual void instance_geometry_set_render_layer(RID p_instance, ObjectID p_layer_id, int32_t p_render_layer_order, int32_t p_format, int32_t p_seed_source, RID p_seed_texture) = 0;
 
 	virtual void instance_geometry_set_shader_parameter(RID p_instance, const StringName &, const Variant &p_value) = 0;
 	virtual Variant instance_geometry_get_shader_parameter(RID p_instance, const StringName &) const = 0;

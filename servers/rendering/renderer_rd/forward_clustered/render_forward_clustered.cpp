@@ -2528,6 +2528,10 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 		const uint32_t compositor_layer_color_pass_flags = (color_pass_flags | uint32_t(COLOR_PASS_FLAG_TRANSPARENT)) & ~uint32_t(COLOR_PASS_FLAG_SEPARATE_SPECULAR) & ~uint32_t(COLOR_PASS_FLAG_MOTION_VECTORS);
 		const RID depth_texture = rb->get_depth_texture();
 		const RD::DataFormat scene_color_format = rb->get_base_data_format();
+		// The engine-owned target is allocated at the scene's internal size (see get_compositor_layer_texture);
+		// a SEED_SOURCE_TEXTURE seed must match it exactly to be copy-compatible.
+		const Size2i layer_size = rb->get_internal_size();
+		RendererRD::TextureStorage *texture_storage = RendererRD::TextureStorage::get_singleton();
 
 		// The shared resolved scene depth must exist — this pass runs after the transparent resolve, so a
 		// null here is a renderer bug, not a user misconfiguration. Hard-fail naming the renderer.
@@ -2560,18 +2564,44 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 
 			const RID layer_framebuffer = FramebufferCacheRD::get_singleton()->get_cache_multiview(layer_view_count, layer_texture, depth_texture);
 
-			// Seed the engine-owned target. v1 implements CLEAR (transparent); the shared scene depth is
-			// LOADed (not cleared) so members are occluded by opaque scene geometry. Bound-Texture /
-			// SCENE_COLOR seeds are deferred — fall back to CLEAR so members never draw over garbage.
-			Vector<Color> clear_colors;
-			clear_colors.push_back(Color(0, 0, 0, 0));
-			if (run_owner->render_layer_seed_source != CompositorRenderLayer::SEED_SOURCE_CLEAR) {
-				WARN_PRINT_ONCE("compositor_layer: only SEED_SOURCE_CLEAR is implemented; seeding the layer target with CLEAR.");
+			// Seed the engine-owned target before its members draw. Two sources are implemented:
+			//   CLEAR   — clear the color to transparent as part of the members' draw list (below).
+			//   TEXTURE — copy the layer's bound seed_texture into the target here, then LOAD it in the draw
+			//             (so sub/mix members read the display-space scene in place). The bound RID is resolved
+			//             to its current RD texture at pass time, so a live per-frame texture works.
+			// A TEXTURE that is missing or mismatched, and the deferred SCENE_COLOR source, fall back to CLEAR
+			// so members never draw over garbage.
+			bool seeded_from_texture = false;
+			if (run_owner->render_layer_seed_source == CompositorRenderLayer::SEED_SOURCE_TEXTURE) {
+				const RID seed_rd = run_owner->render_layer_seed_texture.is_valid() ? texture_storage->texture_get_rd_texture(run_owner->render_layer_seed_texture) : RID();
+				if (seed_rd.is_null()) {
+					WARN_PRINT_ONCE("compositor_layer: SEED_SOURCE_TEXTURE layer has no valid seed_texture; seeding with CLEAR.");
+				} else {
+					const RD::TextureFormat seed_format = RD::get_singleton()->texture_get_format(seed_rd);
+					if (seed_format.format == layer_format && seed_format.width == (uint32_t)layer_size.width && seed_format.height == (uint32_t)layer_size.height && seed_format.array_layers >= layer_view_count) {
+						for (uint32_t v = 0; v < layer_view_count; v++) {
+							RD::get_singleton()->texture_copy(seed_rd, layer_texture, Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(layer_size.width, layer_size.height, 1), 0, 0, v, v);
+						}
+						seeded_from_texture = true;
+					} else {
+						WARN_PRINT_ONCE("compositor_layer: seed_texture format/size does not match the layer target; seeding with CLEAR.");
+					}
+				}
+			} else if (run_owner->render_layer_seed_source == CompositorRenderLayer::SEED_SOURCE_SCENE_COLOR) {
+				WARN_PRINT_ONCE("compositor_layer: SEED_SOURCE_SCENE_COLOR is not implemented in the engine; seeding with CLEAR.");
 			}
 
 			RenderListParameters render_list_params(layer_list.elements.ptr() + run_start, layer_list.element_info.ptr() + run_start, run_size, reverse_cull, PASS_MODE_COLOR, compositor_layer_color_pass_flags, rb_data.is_null(), p_render_data->directional_light_soft_shadows, compositor_layer_rp_uniform_set, get_debug_draw_mode() == RSE::VIEWPORT_DEBUG_DRAW_WIREFRAME, Vector2(), p_render_data->scene_data->lod_distance_multiplier, p_render_data->scene_data->screen_mesh_lod_threshold, layer_view_count, run_start, base_specialization);
-			// Clear the layer color, LOAD the shared scene depth (depth-test on, depth-write off via the transparent pipeline).
-			_render_list_with_draw_list(&render_list_params, layer_framebuffer, RD::DRAW_CLEAR_COLOR_ALL, clear_colors, 0.0f, 0u, p_render_data->render_region);
+			if (seeded_from_texture) {
+				// Seed already copied into the target: LOAD both color (the seed) and the shared scene depth
+				// (depth-test on, depth-write off via the transparent pipeline).
+				_render_list_with_draw_list(&render_list_params, layer_framebuffer, RD::DRAW_DEFAULT_ALL, Vector<Color>(), 0.0f, 0u, p_render_data->render_region);
+			} else {
+				// CLEAR the layer color (transparent), LOAD the shared scene depth.
+				Vector<Color> clear_colors;
+				clear_colors.push_back(Color(0, 0, 0, 0));
+				_render_list_with_draw_list(&render_list_params, layer_framebuffer, RD::DRAW_CLEAR_COLOR_ALL, clear_colors, 0.0f, 0u, p_render_data->render_region);
+			}
 
 			run_start = run_end;
 		}

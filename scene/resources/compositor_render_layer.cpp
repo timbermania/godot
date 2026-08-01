@@ -45,6 +45,10 @@ void CompositorRenderLayer::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_stage"), &CompositorRenderLayer::get_stage);
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "stage", PROPERTY_HINT_ENUM, "Pre Opaque,Post Opaque,Post Sky,Pre Transparent,Post Transparent"), "set_stage", "get_stage");
 
+	ClassDB::bind_method(D_METHOD("set_seed_texture", "seed_texture"), &CompositorRenderLayer::set_seed_texture);
+	ClassDB::bind_method(D_METHOD("get_seed_texture"), &CompositorRenderLayer::get_seed_texture);
+	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "seed_texture", PROPERTY_HINT_RESOURCE_TYPE, "Texture2D"), "set_seed_texture", "get_seed_texture");
+
 	BIND_ENUM_CONSTANT(FORMAT_INHERIT_SCENE_COLOR);
 	BIND_ENUM_CONSTANT(FORMAT_RGBA8);
 	BIND_ENUM_CONSTANT(FORMAT_RGB10_A2);
@@ -92,6 +96,18 @@ void CompositorRenderLayer::set_stage(CompositorEffect::EffectCallbackType p_sta
 
 CompositorEffect::EffectCallbackType CompositorRenderLayer::get_stage() const {
 	return stage;
+}
+
+void CompositorRenderLayer::set_seed_texture(const Ref<Texture2D> &p_seed_texture) {
+	if (seed_texture == p_seed_texture) {
+		return;
+	}
+	seed_texture = p_seed_texture;
+	emit_changed();
+}
+
+Ref<Texture2D> CompositorRenderLayer::get_seed_texture() const {
+	return seed_texture;
 }
 
 CompositorRenderLayer::CompositorRenderLayer() {

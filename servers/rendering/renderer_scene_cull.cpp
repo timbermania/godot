@@ -734,7 +734,7 @@ void RendererSceneCull::instance_set_base(RID p_instance, RID p_base) {
 				geom->geometry_instance->set_pivot_data(instance->sorting_offset, instance->use_aabb_center);
 				geom->geometry_instance->set_lod_bias(instance->lod_bias);
 				geom->geometry_instance->set_transparency(instance->transparency);
-				geom->geometry_instance->set_render_layer(instance->render_layer, instance->render_layer_order, instance->render_layer_format, instance->render_layer_seed_source);
+				geom->geometry_instance->set_render_layer(instance->render_layer, instance->render_layer_order, instance->render_layer_format, instance->render_layer_seed_source, instance->render_layer_seed_texture);
 				geom->geometry_instance->set_use_baked_light(instance->baked_light);
 				geom->geometry_instance->set_use_dynamic_gi(instance->dynamic_gi);
 				geom->geometry_instance->set_use_lightmap(RID(), instance->lightmap_uv_scale, instance->lightmap_slice_index);
@@ -986,7 +986,7 @@ void RendererSceneCull::instance_geometry_set_transparency(RID p_instance, float
 	}
 }
 
-void RendererSceneCull::instance_geometry_set_render_layer(RID p_instance, ObjectID p_layer_id, int32_t p_render_layer_order, int32_t p_format, int32_t p_seed_source) {
+void RendererSceneCull::instance_geometry_set_render_layer(RID p_instance, ObjectID p_layer_id, int32_t p_render_layer_order, int32_t p_format, int32_t p_seed_source, RID p_seed_texture) {
 	Instance *instance = instance_owner.get_or_null(p_instance);
 	ERR_FAIL_NULL(instance);
 
@@ -994,11 +994,12 @@ void RendererSceneCull::instance_geometry_set_render_layer(RID p_instance, Objec
 	instance->render_layer_order = p_render_layer_order;
 	instance->render_layer_format = p_format;
 	instance->render_layer_seed_source = p_seed_source;
+	instance->render_layer_seed_texture = p_seed_texture;
 
 	if ((1 << instance->base_type) & RSE::INSTANCE_GEOMETRY_MASK && instance->base_data) {
 		InstanceGeometryData *geom = static_cast<InstanceGeometryData *>(instance->base_data);
 		ERR_FAIL_NULL(geom->geometry_instance);
-		geom->geometry_instance->set_render_layer(p_layer_id, p_render_layer_order, p_format, p_seed_source);
+		geom->geometry_instance->set_render_layer(p_layer_id, p_render_layer_order, p_format, p_seed_source, p_seed_texture);
 	}
 }
 

@@ -17,6 +17,9 @@
 		<member name="seed_source" type="int" setter="set_seed_source" getter="get_seed_source" enum="CompositorRenderLayer.SeedSource" default="0">
 			How the layer target is initialized before its members draw. [constant SEED_SOURCE_CLEAR] and [constant SEED_SOURCE_TEXTURE] are supported; [constant SEED_SOURCE_SCENE_COLOR] is reserved for a future version.
 		</member>
+		<member name="seed_texture" type="Texture2D" setter="set_seed_texture" getter="get_seed_texture">
+			The texture copied into the layer target before its members draw, used only when [member seed_source] is [constant SEED_SOURCE_TEXTURE]. Its format and size must match the layer target (which matches the scene render target); a mismatch falls back to a clear. May be a live, per-frame-updated GPU texture (for example a [Texture2DRD]): the current contents are read when the layer is drawn.
+		</member>
 		<member name="stage" type="int" setter="set_stage" getter="get_stage" enum="CompositorEffect.EffectCallbackType" default="4">
 			The pipeline stage at which the layer is drawn and made available to consuming effects. Defaults to after the transparent pass (post-resolve).
 		</member>

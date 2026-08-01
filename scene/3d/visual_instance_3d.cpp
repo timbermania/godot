@@ -409,12 +409,20 @@ void GeometryInstance3D::_update_render_layer() {
 	ObjectID layer_id;
 	int format = 0;
 	int seed_source = 0;
+	RID seed_texture;
 	if (render_layer.is_valid()) {
 		layer_id = render_layer->get_instance_id();
 		format = render_layer->get_format();
 		seed_source = render_layer->get_seed_source();
+		// Resolve the seed texture to its RenderingServer RID here (main thread). The render thread reads
+		// the current RD texture from this RID at pass time, so a live per-frame-updated texture works
+		// without re-pushing, as long as the same texture object stays bound.
+		const Ref<Texture2D> seed_tex = render_layer->get_seed_texture();
+		if (seed_tex.is_valid()) {
+			seed_texture = seed_tex->get_rid();
+		}
 	}
-	RS::get_singleton()->instance_geometry_set_render_layer(get_instance(), layer_id, render_layer_order, format, seed_source);
+	RS::get_singleton()->instance_geometry_set_render_layer(get_instance(), layer_id, render_layer_order, format, seed_source, seed_texture);
 }
 
 void GeometryInstance3D::set_render_layer(const Ref<CompositorRenderLayer> &p_render_layer) {

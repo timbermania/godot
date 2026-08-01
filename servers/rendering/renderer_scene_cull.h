@@ -482,6 +482,9 @@ public:
 		int32_t render_layer_order = 0;
 		int32_t render_layer_format = 0;
 		int32_t render_layer_seed_source = 0;
+		// The layer's seed texture, resolved to its RenderingServer texture RID on the main thread (see
+		// GeometryInstance3D::_update_render_layer). Only meaningful when render_layer_seed_source == TEXTURE.
+		RID render_layer_seed_texture;
 
 		Vector<Color> lightmap_target_sh; //target is used for incrementally changing the SH over time, this avoids pops in some corner cases and when going interior <-> exterior
 
@@ -1038,7 +1041,7 @@ public:
 	virtual void instance_set_surface_override_material(RID p_instance, int p_surface, RID p_material);
 	virtual void instance_set_visible(RID p_instance, bool p_visible);
 	virtual void instance_geometry_set_transparency(RID p_instance, float p_transparency);
-	virtual void instance_geometry_set_render_layer(RID p_instance, ObjectID p_layer_id, int32_t p_render_layer_order, int32_t p_format, int32_t p_seed_source);
+	virtual void instance_geometry_set_render_layer(RID p_instance, ObjectID p_layer_id, int32_t p_render_layer_order, int32_t p_format, int32_t p_seed_source, RID p_seed_texture);
 
 	virtual void instance_teleport(RID p_instance);
 

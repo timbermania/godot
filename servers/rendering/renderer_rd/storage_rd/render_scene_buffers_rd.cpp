@@ -521,7 +521,9 @@ RID RenderSceneBuffersRD::get_compositor_layer_texture(uint64_t p_layer_id, RD::
 
 	// Size and view_count are structural invariants: the target matches the scene's
 	// internal render size and view count by construction, single-sampled (post-resolve).
-	const uint32_t usage_bits = RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT | RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT;
+	// CAN_COPY_TO lets a SEED_SOURCE_TEXTURE layer copy the bound seed into this target before members draw;
+	// CAN_COPY_FROM lets a CompositorEffect copy the drawn target back out for readback/verification.
+	const uint32_t usage_bits = RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT | RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT | RD::TEXTURE_USAGE_CAN_COPY_TO_BIT;
 	return create_texture(RB_SCOPE_COMPOSITOR_LAYER, layer_name, p_data_format, usage_bits, RD::TEXTURE_SAMPLES_1, internal_size, view_count, 1, true, false);
 }
 

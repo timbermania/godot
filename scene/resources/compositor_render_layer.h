@@ -32,6 +32,7 @@
 
 #include "core/io/resource.h"
 #include "scene/resources/compositor.h"
+#include "scene/resources/texture.h"
 
 // Identity token for a compositor render layer: a held-out target that member
 // materials (render_mode compositor_layer) draw into, and a CompositorEffect
@@ -71,6 +72,11 @@ private:
 	Format format = FORMAT_INHERIT_SCENE_COLOR;
 	SeedSource seed_source = SEED_SOURCE_CLEAR;
 	CompositorEffect::EffectCallbackType stage = CompositorEffect::EFFECT_CALLBACK_TYPE_POST_TRANSPARENT;
+	// Only meaningful when seed_source == SEED_SOURCE_TEXTURE. The engine copies this texture into the
+	// engine-owned layer target before its members draw, so a fold's sub/mix modes can read the seed in
+	// place. May be a live, per-frame-updated RD-backed texture (e.g. Texture2DRD): the render thread
+	// resolves the current RD texture from this resource's stable RID at pass time.
+	Ref<Texture2D> seed_texture;
 
 protected:
 	static void _bind_methods();
@@ -84,6 +90,9 @@ public:
 
 	void set_stage(CompositorEffect::EffectCallbackType p_stage);
 	CompositorEffect::EffectCallbackType get_stage() const;
+
+	void set_seed_texture(const Ref<Texture2D> &p_seed_texture);
+	Ref<Texture2D> get_seed_texture() const;
 
 	CompositorRenderLayer();
 	~CompositorRenderLayer();
