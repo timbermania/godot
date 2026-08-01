@@ -112,6 +112,12 @@ NOT `--headless`; `scons platform=linuxbsd target=editor dev_build=yes -j24`).
   **Reusable finding:** `tests/SCsub` auto-globs `tests/**/*.cpp` + auto-generates `force_link.gen.h`
   from each `TEST_FORCE_LINK` — **no `test_main.cpp` edit needed** for this or future test steps.
   Uncommitted working-tree change.
+  **Post-review cleanup (2026-08-01, `/code-review ultra`):** the stable secondary rule was implemented
+  twice — once here (unit-tested) and once in the shipped `SortByLayerThenOrder` compound comparator
+  (`render_forward_clustered.h`, untested). Extracted the rule into a single `compositor_layer_order_less()`
+  free function in `compositor_layer_order_sort.h`; both `CompositorLayerOrderComparator` and the compound
+  comparator now call it, so the tested code IS the shipped code. Ordering behavior unchanged (5/5 unit +
+  add/sub/mix fold all still green, identical luminance).
 - [Build · Step 2: register `compositor_layer` render_mode + shader-variant flag + Mobile gate](issues/07-build-render-mode-registration.md) —
   **built + verified.** The general `compositor_layer` render_mode registered globally
   (`shader_types.cpp`) + a `compositor_layer` shader-variant bool bound on both Forward+ and Mobile
@@ -132,6 +138,11 @@ NOT `--headless`; `scons platform=linuxbsd target=editor dev_build=yes -j24`).
   Tests 4/4, 9 assertions; build clean 32s. **Handoff to Step 4/5:** accessor compiled but uncalled (Step 5
   wires it → first pixels); Format→`RD::DataFormat` mapping is the caller's job, resolving
   `INHERIT_SCENE_COLOR` to `get_base_data_format()`. Uncommitted working-tree change.
+  **Post-review fix (2026-08-01, `/code-review ultra`):** `set_stage` now matches its three sibling setters
+  (`ERR_FAIL_INDEX` → guard → assign → `emit_changed()`) AND gates the inert-knob honesty gap — the
+  `stage` field is never wired to the pass (hardcoded POST_TRANSPARENT per plan Q4's deferred earlier-path),
+  so the setter `ERR_FAIL_COND`-rejects any non-`POST_TRANSPARENT` value instead of silently ignoring it,
+  and the inspector hint offers only that one value. Added a rejection unit test (5/5 green).
 - [Build · Step 4: per-instance props + fill routing + new render list](issues/09-build-instance-props-fill-routing.md) —
   **built + verified windowed.** Full per-instance plumbing (`GeometryInstance3D.render_layer` [Ref] +
   `render_layer_order` [int] → RS `instance_geometry_set_render_layer(RID, ObjectID, int32_t)` → scene_cull
@@ -211,6 +222,11 @@ NOT `--headless`; `scons platform=linuxbsd target=editor dev_build=yes -j24`).
   doctool zero-drift, idempotent. Verified `/tmp/step7-check`: accessor returns the member-drawn target
   (`255,0,0,255`) **and equals** the render-side string-path RID; render_layers round-trips; mobile gate =
   false. **Engine remaining = ticket 13 only.**
+  **Post-review fix (2026-08-01, `/code-review ultra`):** `CompositorRenderLayer.xml` no longer oversells
+  `stage` as a working 5-value knob — the class description drops "at the declared stage" for "a single
+  fixed point (after the transparent pass)", and the `stage` member documents that only
+  `EFFECT_CALLBACK_TYPE_POST_TRANSPARENT` is honored in v1 (earlier stages reserved; `set_stage` rejects
+  them). Paired with the ticket-08 setter gate. Doc-accuracy debt closed.
 - [Build · seed: real `TEXTURE` seed source](issues/13-build-texture-seed-source.md) — **built + verified
   windowed; the engine primitive is now COMPLETE.** Added `seed_texture : Texture2D` to
   `CompositorRenderLayer`; extended the Step-6 push-down `FUNC5`→`FUNC6` so the seed's *RenderingServer* RID

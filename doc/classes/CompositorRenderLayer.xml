@@ -4,7 +4,7 @@
 		Identity token for a compositor render layer: a held-out render target drawn into by member materials and composited back by a [CompositorEffect].
 	</brief_description>
 	<description>
-		A [CompositorRenderLayer] names a held-out render target. Materials that use [code]render_mode compositor_layer[/code] and reference this resource are drawn into that target instead of the main scene, in caller-controlled order, then a [CompositorEffect] composites the target back into the scene at the declared [member stage].
+		A [CompositorRenderLayer] names a held-out render target. Materials that use [code]render_mode compositor_layer[/code] and reference this resource are drawn into that target instead of the main scene, in caller-controlled order, then a [CompositorEffect] composites the target back into the scene. In this version the target is drawn at a single fixed point (after the transparent pass); see [member stage].
 		This resource is purely an identity and a small set of declarations ([member format], [member seed_source], [member stage]); it is not a policy container. The target's size, view count and depth source are engine-owned structural invariants that match the scene render target by construction. The engine allocates exactly one target per distinct [CompositorRenderLayer] instance, so several materials referencing the same resource share one layer.
 		[b]Note:[/b] This is an experimental rendering feature and only supported by the Forward+ rendering method.
 	</description>
@@ -21,7 +21,7 @@
 			The texture copied into the layer target before its members draw, used only when [member seed_source] is [constant SEED_SOURCE_TEXTURE]. Its format and size must match the layer target (which matches the scene render target); a mismatch falls back to a clear. May be a live, per-frame-updated GPU texture (for example a [Texture2DRD]): the current contents are read when the layer is drawn.
 		</member>
 		<member name="stage" type="int" setter="set_stage" getter="get_stage" enum="CompositorEffect.EffectCallbackType" default="4">
-			The pipeline stage at which the layer is drawn and made available to consuming effects. Defaults to after the transparent pass (post-resolve).
+			The pipeline stage at which the layer is drawn and made available to consuming effects. Only [constant CompositorEffect.EFFECT_CALLBACK_TYPE_POST_TRANSPARENT] (after the transparent pass, post-resolve) is supported in this version; the earlier stages are reserved for a future version, and [method set_stage] rejects them.
 		</member>
 	</members>
 	<constants>

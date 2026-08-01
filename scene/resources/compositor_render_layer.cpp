@@ -43,7 +43,9 @@ void CompositorRenderLayer::_bind_methods() {
 
 	ClassDB::bind_method(D_METHOD("set_stage", "stage"), &CompositorRenderLayer::set_stage);
 	ClassDB::bind_method(D_METHOD("get_stage"), &CompositorRenderLayer::get_stage);
-	ADD_PROPERTY(PropertyInfo(Variant::INT, "stage", PROPERTY_HINT_ENUM, "Pre Opaque,Post Opaque,Post Sky,Pre Transparent,Post Transparent"), "set_stage", "get_stage");
+	// Only Post Transparent is honored in this version; the other EffectCallbackType stages are reserved
+	// (set_stage rejects them), so the inspector offers just the supported value, pinned to its enum index.
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "stage", PROPERTY_HINT_ENUM, "Post Transparent:4"), "set_stage", "get_stage");
 
 	ClassDB::bind_method(D_METHOD("set_seed_texture", "seed_texture"), &CompositorRenderLayer::set_seed_texture);
 	ClassDB::bind_method(D_METHOD("get_seed_texture"), &CompositorRenderLayer::get_seed_texture);
@@ -91,7 +93,16 @@ CompositorRenderLayer::SeedSource CompositorRenderLayer::get_seed_source() const
 
 void CompositorRenderLayer::set_stage(CompositorEffect::EffectCallbackType p_stage) {
 	ERR_FAIL_INDEX(p_stage, CompositorEffect::EFFECT_CALLBACK_TYPE_MAX);
+	// v1 draws the held-out pass at a single hardcoded point (after the transparent resolve, before the
+	// POST_TRANSPARENT effect callback). Earlier stages are declared on the enum but not yet wired through
+	// the render instance/pass, so reject them here rather than silently ignoring the request. Lifting this
+	// is the deferred "stage earlier-path" work (see plan Q4).
+	ERR_FAIL_COND_MSG(p_stage != CompositorEffect::EFFECT_CALLBACK_TYPE_POST_TRANSPARENT, "CompositorRenderLayer only supports drawing at EFFECT_CALLBACK_TYPE_POST_TRANSPARENT in this version; earlier stages are reserved for a future version.");
+	if (stage == p_stage) {
+		return;
+	}
 	stage = p_stage;
+	emit_changed();
 }
 
 CompositorEffect::EffectCallbackType CompositorRenderLayer::get_stage() const {

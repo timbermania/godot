@@ -46,19 +46,24 @@
 // The key is an exact `int32_t` (the general primitive's `render_layer_order`), not the spike's
 // uncapped `float sorting_offset`: an int has no float32-ULP cliff and cannot be NaN, so the NaN
 // canonicalization the float version needed to stay a valid strict weak ordering is gone.
+
+// The stable ordering rule itself, factored out so the unit-tested code IS the shipped code: the
+// real render path's compound comparator (SortByLayerThenOrder in render_forward_clustered.h) sorts
+// primarily by layer identity, then breaks each layer's members with EXACTLY this call. Ascending
+// `render_layer_order`; ties (equal key) fall back to the submission index so equal-key instances
+// keep their insertion order rather than an unstable introsort's arbitrary one.
+_FORCE_INLINE_ bool compositor_layer_order_less(int32_t p_order_a, uint32_t p_index_a, int32_t p_order_b, uint32_t p_index_b) {
+	if (p_order_a != p_order_b) {
+		return p_order_a < p_order_b;
+	}
+	return p_index_a < p_index_b; // Stable tie-break: preserve submission order on equal keys.
+}
+
 struct CompositorLayerOrderComparator {
 	const int32_t *orders = nullptr;
 
 	_FORCE_INLINE_ bool operator()(uint32_t p_a, uint32_t p_b) const {
-		const int32_t ka = orders[p_a];
-		const int32_t kb = orders[p_b];
-		if (ka < kb) {
-			return true;
-		}
-		if (kb < ka) {
-			return false;
-		}
-		return p_a < p_b; // Stable tie-break: preserve submission order on equal keys.
+		return compositor_layer_order_less(orders[p_a], p_a, orders[p_b], p_b);
 	}
 };
 

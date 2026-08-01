@@ -737,9 +737,10 @@ private:
 		// layer identity (its CompositorRenderLayer object id), so every layer's members end up
 		// contiguous and the held-out pass can draw each layer as one element range; secondary key
 		// = the caller order (ascending `render_layer_order`); ties broken by submission index for a
-		// deterministic, stable-equivalent result. The secondary rule is exactly the one unit-tested
-		// in compositor_layer_order_sort.h (compute_order); the order key is a pure CPU-side sort
-		// input, never uploaded to the GPU.
+		// deterministic, stable-equivalent result. The secondary rule delegates to
+		// `compositor_layer_order_less` in compositor_layer_order_sort.h, so the unit-tested rule
+		// (compute_order) IS the one shipped here; the order key is a pure CPU-side sort input, never
+		// uploaded to the GPU.
 		struct SortByLayerThenOrder {
 			GeometryInstanceSurfaceDataCache *const *elements = nullptr;
 			_FORCE_INLINE_ bool operator()(uint32_t a, uint32_t b) const {
@@ -750,10 +751,7 @@ private:
 				if (la != lb) {
 					return la < lb;
 				}
-				if (ia->render_layer_order != ib->render_layer_order) {
-					return ia->render_layer_order < ib->render_layer_order;
-				}
-				return a < b; // stable: preserve submission order on ties
+				return compositor_layer_order_less(ia->render_layer_order, a, ib->render_layer_order, b);
 			}
 		};
 
