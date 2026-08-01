@@ -225,6 +225,19 @@ NOT `--headless`; `scons platform=linuxbsd target=editor dev_build=yes -j24`).
   seed survived = would be `0,0,0,0` on CLEAR); mismatch→CLEAR guard confirmed. 14 files, +102/−24; build 50s;
   comparator 5/5; doctool zero-drift. **Handoff to 15:** game Pass A must author a `Texture2DRD`
   (CAN_COPY_FROM, internal size, format matching `fold_layer.tres`) bound once as `seed_texture`.
+- [Migrate · membership flip + int order key + shader rename + routing tests](issues/14-migrate-membership-order-key.md) —
+  **built + verified headless (game-side); 8/8 routing/DepthMode tests + 5/5 guard tools green. No pixels yet (ticket 15).**
+  User chose the **FULL** migration (all 17 `compositor_fold` render_mode decls → `compositor_layer`, not just the plan's 9
+  combat shaders — the new engine rejects `compositor_fold`) + guard-tool/test migration. Order key:
+  `DepthMode.sorting_offset_for` (float) → **`render_layer_order_for(order_z, rank) -> int`** = `round(order_z/0.19)·RANK_STRIDE
+  + rank` (`RANK_STRIDE = 1<<10`; `FOLD_RANK_EPS` retired). Membership opt-in = **exactly 2 sites** (`Fold.add` +
+  `EngineFoldCompositor`), both stamping `render_layer = Fold.FOLD_LAYER` (`preload` of new `assets/fold_layer.tres`, shared →
+  one partition) + int `render_layer_order`. **fold_layer.tres:** `format=2` (FORMAT_RGB10_A2 → RD `A2B10G10R10_UNORM_PACK32`;
+  the plan's name was the *DataFormat*, not the resource enum), `seed_source=2` (TEXTURE), `stage` defaults POST_TRANSPARENT.
+  **D4 coverage resolved by reading the engine:** Godot maps `alpha_blend_op=ADD` for add/sub/mix (even blend_sub only
+  reverse-subtracts *color*), so coverage accumulates from the shaders' existing ALPHA>0 — no functional shader change, just
+  corrected the stale "engine forces ADD/ONE/ONE" comments; pixel-proof deferred to 15. **NOT touched (ticket 15):**
+  `FoldSurface.gd`'s `&"compositor_fold"` scratch string. 48 files, uncommitted.
 
 ## Not yet specified
 
@@ -242,9 +255,12 @@ NOT `--headless`; `scons platform=linuxbsd target=editor dev_build=yes -j24`).
   (2026-08-01): the engine copies a bound (live-updatable) `Texture2DRD` into the target and LOADs it under
   the held-out members. `SCENE_COLOR` ruled out of the engine (documented v2 extension only, not a ticket).
 - **Migrate the game fold onto the new primitive** — GRADUATED (2026-08-01, ticket 03) into game tickets **14**
-  (membership flip + int order key + shader rename + routing tests; writable now, blocked by 07/08/09) and **15**
-  (Pass A/C retarget + seed-texture wiring + autopilot gate → first game-scene pixels; **13 now resolved, so
-  15 waits only on 14**). Both game tickets 14 + 15 are the sole open work left on the map.
+  (membership flip + int order key + shader rename + routing tests; **RESOLVED 2026-08-01** — full migration, all
+  17 shaders renamed, 2-site opt-in via `Fold.add`/`EngineFoldCompositor`, `fold_layer.tres` created, tests + guards
+  green headless) and **15** (Pass A/C retarget + seed-texture wiring + autopilot gate → first game-scene pixels).
+  **With 13 + 14 both resolved, ticket 15 is now UNBLOCKED and is the sole open ticket on the map** — the last build
+  step before the destination. The frame is intentionally half-migrated after 14: carriers are held out into the
+  engine-owned target while Pass A/C still use the old magic-string scratch, so nothing renders until 15.
 - **Build/run recipe for the game against the new engine** (analogue of `spike-fold-run-invocation`) — folded into
   ticket **15** (documented + saved as a memory note once the fold renders windowed).
 - **Capture the DEMI2 A/B proof** (ticket 04 defined it; `plans/04-demi2-proof-handoff.md`) — graduates once the
