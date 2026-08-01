@@ -144,14 +144,33 @@ NOT `--headless`; `scons platform=linuxbsd target=editor dev_build=yes -j24`).
   control renders, `compositor_layer`-without-`render_layer` still renders; ordering `{5,5,-2,0}` across 2
   layers → `-2 0 5 5`. 12 engine files, +133/−16; build clean 23s. **Also:** `GeometryInstanceDummy` needed a
   no-op `set_render_layer` override (implements the interface directly). Uncommitted working-tree change.
+- [Build · Step 5: the held-out pass — first end-to-end pixels](issues/10-build-heldout-pass.md) — **built +
+  verified windowed.** The pass draws `compositor_layer` members (held out, grouped by layer, caller-ordered)
+  into engine-owned targets, occluded by the real scene, seeded CLEAR. Inverted the spike's stateless-LOAD
+  into **engine-allocates-and-seeds** (`get_compositor_layer_texture` allocate-on-first-access + CLEAR). Edits
+  (`render_forward_clustered.{h,cpp}`): compound `sort_by_layer_order` (group by layer id → contiguous runs,
+  Q3 = compound-key not HashMap), repeat-group guard so instancing never spans a layer boundary, the missing
+  `_fill_instance_data` + early uniform-set, and the pass itself (per-run: resolve resource → target → CLEAR
+  seed → multiview FB vs resolved depth → draw sub-range via `element_offset`, `COLOR_PASS_FLAG_TRANSPARENT` =
+  **depth-write off structurally**). **Grilled decisions:** format/seed via ObjectDB lookup at pass time (A1) —
+  ⚠️ **render-thread read of a main-thread Resource, must push-down before the PR (Step 6)**; CLEAR-only seed
+  this session (others warn+fallback to CLEAR); proof by direct RD readback. Verified `/tmp/step5-check`:
+  visible→`255,0,0,255` (drawn), occluded→`0,0,0,0` (depth-occluded), `had_texture=true`. **Reusable:**
+  `texture_get_data` *inside* a compositor callback **deadlocks** — `texture_copy` to an owned texture on the
+  frame command list, read back from `_process` instead; a GDScript effect reads the target generically via
+  `RenderSceneBuffersRD.get_texture("compositor_layer", str(id))` (no Step-7 accessor needed for verification).
+  Uncommitted working-tree change.
 
 ## Not yet specified
 
 <!-- in-scope fog; graduates as tickets resolve -->
 - **Build the engine primitive** — GRADUATED (2026-07-31, ticket 02) into 7 task tickets **06–12** (Steps
-  1–7). **06 + 07 + 08 + 09 resolved.** Build frontier = **10** (dep 09 met — the held-out pass: partition
-  `RENDER_LIST_COMPOSITOR_LAYER` by `render_layer` ObjectID, seed + draw each partition into
-  `get_compositor_layer_texture()` on resolved depth → first pixels); 11 & 12 by 10.
+  1–7). **06 + 07 + 08 + 09 + 10 resolved** (first end-to-end pixels landed). Build frontier = **11 & 12**
+  (both dep 10 met, now takeable in parallel): **11** = strip FFT policy + convert guard-rails to
+  invariants/hard-fails — **also fold in the Step-5 hardening: push `format`/`seed_source` down as value
+  config so the pass stops reading a `Resource` on the render thread**; **12** = `get_layer_texture` accessor
+  + `render_layers` effect property + capability method + class-ref docs (Step 7). Bound-Texture / SCENE_COLOR
+  seeds remain a fast-follow (Step 5 shipped CLEAR only).
 - **Migrate the game fold onto the new primitive** (the game-side edits) — graduates once the
   migration plan (ticket 03) lands.
 - **Build/run recipe for the game against the new engine** (analogue of `spike-fold-run-invocation`
