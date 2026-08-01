@@ -733,26 +733,49 @@ private:
 			sorter.sort(elements.ptr(), elements.size());
 		}
 
-		// Reorders this list into the caller's compositor render-layer order: ascending
-		// `render_layer_order`, stable on ties (submission index). The order key is a pure
-		// CPU-side sort input — never uploaded to the GPU. See compositor_layer_order_sort.h.
+		// Compound comparator for the compositor render-layer list: primary key = the member's
+		// layer identity (its CompositorRenderLayer object id), so every layer's members end up
+		// contiguous and the held-out pass can draw each layer as one element range; secondary key
+		// = the caller order (ascending `render_layer_order`); ties broken by submission index for a
+		// deterministic, stable-equivalent result. The secondary rule is exactly the one unit-tested
+		// in compositor_layer_order_sort.h (compute_order); the order key is a pure CPU-side sort
+		// input, never uploaded to the GPU.
+		struct SortByLayerThenOrder {
+			GeometryInstanceSurfaceDataCache *const *elements = nullptr;
+			_FORCE_INLINE_ bool operator()(uint32_t a, uint32_t b) const {
+				const GeometryInstanceForwardClustered *ia = elements[a]->owner;
+				const GeometryInstanceForwardClustered *ib = elements[b]->owner;
+				const uint64_t la = ia->render_layer;
+				const uint64_t lb = ib->render_layer;
+				if (la != lb) {
+					return la < lb;
+				}
+				if (ia->render_layer_order != ib->render_layer_order) {
+					return ia->render_layer_order < ib->render_layer_order;
+				}
+				return a < b; // stable: preserve submission order on ties
+			}
+		};
+
+		// Groups this list by compositor render-layer identity (contiguous per-layer runs) and, within
+		// each layer, applies the caller order. See SortByLayerThenOrder.
 		void sort_by_layer_order() {
 			const uint32_t size = elements.size();
 			if (size < 2) {
 				return;
 			}
-			LocalVector<int32_t> orders;
-			orders.resize(size);
+			LocalVector<uint32_t> perm;
+			perm.resize(size);
 			for (uint32_t i = 0; i < size; i++) {
-				orders[i] = elements[i]->owner->render_layer_order;
+				perm[i] = i;
 			}
-			LocalVector<uint32_t> order;
-			order.resize(size);
-			compute_order(order.ptr(), orders.ptr(), size);
+			SortArray<uint32_t, SortByLayerThenOrder> sorter;
+			sorter.compare.elements = elements.ptr();
+			sorter.sort(perm.ptr(), size);
 			LocalVector<GeometryInstanceSurfaceDataCache *> sorted;
 			sorted.resize(size);
 			for (uint32_t i = 0; i < size; i++) {
-				sorted[i] = elements[order[i]];
+				sorted[i] = elements[perm[i]];
 			}
 			for (uint32_t i = 0; i < size; i++) {
 				elements[i] = sorted[i];
