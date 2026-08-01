@@ -160,6 +160,20 @@ NOT `--headless`; `scons platform=linuxbsd target=editor dev_build=yes -j24`).
   frame command list, read back from `_process` instead; a GDScript effect reads the target generically via
   `RenderSceneBuffersRD.get_texture("compositor_layer", str(id))` (no Step-7 accessor needed for verification).
   Uncommitted working-tree change.
+- [Game-migration plan: point the FFT fold at the `compositor_layer` primitive](issues/03-game-migration-plan.md) —
+  **resolved (grilling).** The 3-pass frame model survives; only membership/order-key/target-handle/seed-handoff
+  move. **Crux:** sub/mix are on the proof's critical path and read `B` in place → CLEAR seed insufficient → the
+  seed must be the **display-space scene**, supplied as a bound `TEXTURE` (Pass A authors it, engine copies into the
+  separate engine-owned target before Pass B). PSX scene has **no non-folded transparent behind the fold**, so the
+  opaque scene is a complete seed and the spike's composite-back clobber can't recur. **`SCENE_COLOR` ruled OUT of
+  the engine** (linear-HDR vs display-space = policy leak); documented v2 extension only. **"Seed/composite at any
+  point" flexibility rejected** — it's already `CompositorEffect` + the `stage` field; knobs would rebuild it as
+  config + bake a blend policy = the eval's loudest 🔴; composite stays 100% userland. Membership flip
+  (`compositor_fold`→`compositor_layer` + per-instance `render_layer`/`render_layer_order`), float→int32 order key
+  (`render_layer_order_for = round(z/0.19)·RANK_STRIDE + rank`), coverage→shader ALPHA, autopilot feature-detects
+  `is_compositor_layer_supported()`. **Critical-path consequence:** the engine `TEXTURE` seed must ship before the
+  game renders — this graduates an *engine* ticket (13) that blocks the game's render ticket (15). Plan:
+  `plans/03-game-migration-plan.md`. Graduated 13/14/15.
 
 ## Not yet specified
 
@@ -169,12 +183,15 @@ NOT `--headless`; `scons platform=linuxbsd target=editor dev_build=yes -j24`).
   (both dep 10 met, now takeable in parallel): **11** = strip FFT policy + convert guard-rails to
   invariants/hard-fails — **also fold in the Step-5 hardening: push `format`/`seed_source` down as value
   config so the pass stops reading a `Resource` on the render thread**; **12** = `get_layer_texture` accessor
-  + `render_layers` effect property + capability method + class-ref docs (Step 7). Bound-Texture / SCENE_COLOR
-  seeds remain a fast-follow (Step 5 shipped CLEAR only).
-- **Migrate the game fold onto the new primitive** (the game-side edits) — graduates once the
-  migration plan (ticket 03) lands.
-- **Build/run recipe for the game against the new engine** (analogue of `spike-fold-run-invocation`
-  for the migrated game) — graduates once 01 + 03 clarify the binary and game branch.
+  + `render_layers` effect property + capability method + class-ref docs (Step 7).
+- **`TEXTURE` seed source** — GRADUATED (2026-08-01, ticket 03) into engine ticket **13**, and promoted from
+  fast-follow to **critical path** (the FFT proof's sub/mix modes require the display-space seed). `SCENE_COLOR`
+  ruled out of the engine (documented v2 extension only, not a ticket).
+- **Migrate the game fold onto the new primitive** — GRADUATED (2026-08-01, ticket 03) into game tickets **14**
+  (membership flip + int order key + shader rename + routing tests; writable now, blocked by 07/08/09) and **15**
+  (Pass A/C retarget + seed-texture wiring + autopilot gate; blocked by 13 + 14 → first game-scene pixels).
+- **Build/run recipe for the game against the new engine** (analogue of `spike-fold-run-invocation`) — folded into
+  ticket **15** (documented + saved as a memory note once the fold renders windowed).
 - **Restore the "working fork proves it" line** to `docs/sounding-7916-comment-draft.md` — graduates
   once the fold renders in-scene (the last in-scope step before the destination).
 
