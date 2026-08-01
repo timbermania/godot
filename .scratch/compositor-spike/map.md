@@ -132,13 +132,26 @@ NOT `--headless`; `scons platform=linuxbsd target=editor dev_build=yes -j24`).
   Tests 4/4, 9 assertions; build clean 32s. **Handoff to Step 4/5:** accessor compiled but uncalled (Step 5
   wires it → first pixels); Format→`RD::DataFormat` mapping is the caller's job, resolving
   `INHERIT_SCENE_COLOR` to `get_base_data_format()`. Uncommitted working-tree change.
+- [Build · Step 4: per-instance props + fill routing + new render list](issues/09-build-instance-props-fill-routing.md) —
+  **built + verified windowed.** Full per-instance plumbing (`GeometryInstance3D.render_layer` [Ref] +
+  `render_layer_order` [int] → RS `instance_geometry_set_render_layer(RID, ObjectID, int32_t)` → scene_cull
+  Instance store + re-apply → `RenderGeometryInstanceBase` fields), a new `RENDER_LIST_COMPOSITOR_LAYER`
+  slot, a fill-branch routing members (`shader->compositor_layer && inst->render_layer.is_valid()`) **out of
+  opaque/alpha/motion**, and `sort_by_layer_order()` over the Step-1 `compute_order`. **Q1 resolved:** dedicated
+  `int32_t render_layer_order`, NOT the spike's overloaded float `sorting_offset`; pure CPU-side sort input,
+  never uploaded (`_fill_instance_data` untouched). **Q2:** membership identity = resource `ObjectID`
+  (`get_instance_id()`), matching Step 3's target key. Verified: member mesh **disappears** (held out),
+  control renders, `compositor_layer`-without-`render_layer` still renders; ordering `{5,5,-2,0}` across 2
+  layers → `-2 0 5 5`. 12 engine files, +133/−16; build clean 23s. **Also:** `GeometryInstanceDummy` needed a
+  no-op `set_render_layer` override (implements the interface directly). Uncommitted working-tree change.
 
 ## Not yet specified
 
 <!-- in-scope fog; graduates as tickets resolve -->
 - **Build the engine primitive** — GRADUATED (2026-07-31, ticket 02) into 7 task tickets **06–12** (Steps
-  1–7). **06 + 07 + 08 resolved.** Build frontier = **09** (deps 06+07+08 all met — per-instance
-  `render_layer`/`render_layer_order` props + fill routing + new render list); 10 by 09; 11 & 12 by 10.
+  1–7). **06 + 07 + 08 + 09 resolved.** Build frontier = **10** (dep 09 met — the held-out pass: partition
+  `RENDER_LIST_COMPOSITOR_LAYER` by `render_layer` ObjectID, seed + draw each partition into
+  `get_compositor_layer_texture()` on resolved depth → first pixels); 11 & 12 by 10.
 - **Migrate the game fold onto the new primitive** (the game-side edits) — graduates once the
   migration plan (ticket 03) lands.
 - **Build/run recipe for the game against the new engine** (analogue of `spike-fold-run-invocation`
