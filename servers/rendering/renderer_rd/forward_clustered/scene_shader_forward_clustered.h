@@ -253,6 +253,7 @@ public:
 		bool uses_normal_map = false;
 		bool uses_bent_normal_map = false;
 		bool wireframe = false;
+		bool compositor_layer = false; // route this material's output into an engine-owned compositor render layer (Forward+ only)
 
 		bool unshaded = false;
 		bool uses_vertex = false;
