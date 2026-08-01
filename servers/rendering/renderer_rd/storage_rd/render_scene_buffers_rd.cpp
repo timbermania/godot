@@ -525,6 +525,19 @@ RID RenderSceneBuffersRD::get_compositor_layer_texture(uint64_t p_layer_id, RD::
 	return create_texture(RB_SCOPE_COMPOSITOR_LAYER, layer_name, p_data_format, usage_bits, RD::TEXTURE_SAMPLES_1, internal_size, view_count, 1, true, false);
 }
 
+RID RenderSceneBuffersRD::get_compositor_layer_texture(uint64_t p_layer_id) const {
+	// Consumer-side, read-only: never allocates, so a CompositorEffect that names a layer no
+	// member drew this frame gets an empty RID rather than a spuriously-created target.
+	if (p_layer_id == 0) {
+		return RID();
+	}
+	const StringName layer_name = itos(p_layer_id);
+	if (!has_texture(RB_SCOPE_COMPOSITOR_LAYER, layer_name)) {
+		return RID();
+	}
+	return get_texture(RB_SCOPE_COMPOSITOR_LAYER, layer_name);
+}
+
 // Allocate shared buffers
 void RenderSceneBuffersRD::allocate_blur_textures() {
 	if (has_texture(RB_SCOPE_BUFFERS, RB_TEX_BLUR_0)) {

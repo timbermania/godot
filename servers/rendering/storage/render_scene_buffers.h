@@ -114,4 +114,10 @@ public:
 	virtual void set_texture_mipmap_bias(float p_texture_mipmap_bias) = 0;
 	virtual void set_anisotropic_filtering_level(RSE::ViewportAnisotropicFiltering p_anisotropic_filtering_level) = 0;
 	virtual void set_use_debanding(bool p_use_debanding) = 0;
+
+	// Read-only lookup of the engine-owned target for a compositor render layer, keyed by
+	// the CompositorRenderLayer resource's object id (see CompositorEffect.get_layer_texture).
+	// Returns an empty RID when that layer produced no target this frame. The RD backend
+	// overrides this; the abstract base owns no buffers and returns nothing.
+	virtual RID get_compositor_layer_texture(uint64_t p_layer_id) const { return RID(); }
 };

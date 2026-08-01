@@ -233,6 +233,11 @@ public:
 	// resource at first access. Freed with the rest of the named textures in cleanup().
 	RID get_compositor_layer_texture(uint64_t p_layer_id, RD::DataFormat p_data_format);
 
+	// Read-only lookup for consumers (a CompositorEffect reading its layer): returns the
+	// already-allocated target for this layer id, or an empty RID if none was produced this
+	// frame. Never allocates — unlike the format-taking overload the held-out pass uses.
+	virtual RID get_compositor_layer_texture(uint64_t p_layer_id) const override;
+
 	// Allocate shared buffers
 	void allocate_blur_textures();
 

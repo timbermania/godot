@@ -32,7 +32,10 @@
 
 #include "core/io/resource.h"
 #include "core/object/gdvirtual.gen.h"
+#include "core/variant/typed_array.h"
 #include "servers/rendering/storage/render_data.h"
+
+class CompositorRenderLayer;
 
 /* Compositor Effect */
 
@@ -59,6 +62,12 @@ private:
 	bool needs_motion_vectors = false;
 	bool needs_normal_roughness = false;
 	bool needs_separate_specular = false;
+
+	// The compositor render layers this effect consumes; declarative (the engine allocates a
+	// target per referenced layer as members draw). Read back inside the callback via
+	// get_layer_texture(). Held only for the duration of one _render_callback().
+	TypedArray<CompositorRenderLayer> render_layers;
+	const RenderData *current_render_data = nullptr;
 
 protected:
 	static void _bind_methods();
@@ -91,6 +100,15 @@ public:
 
 	void set_needs_separate_specular(bool p_enabled);
 	bool get_needs_separate_specular() const;
+
+	void set_render_layers(const TypedArray<CompositorRenderLayer> &p_render_layers);
+	TypedArray<CompositorRenderLayer> get_render_layers() const;
+
+	// Resolve a declared layer's engine-owned target to an RID. Only valid while a
+	// _render_callback() is running (it reads the current frame's render buffers); returns an
+	// empty RID otherwise or when the layer produced no target this frame. Keyed by the same
+	// resource object the members reference — no string, no index.
+	RID get_layer_texture(const Ref<CompositorRenderLayer> &p_render_layer) const;
 
 	CompositorEffect();
 	~CompositorEffect();

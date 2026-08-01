@@ -32,6 +32,7 @@
 
 #include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
+#include "scene/resources/compositor_render_layer.h"
 #include "servers/rendering/rendering_server.h"
 
 /* Compositor Effect */
@@ -65,6 +66,12 @@ void CompositorEffect::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_needs_separate_specular"), &CompositorEffect::get_needs_separate_specular);
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "needs_separate_specular"), "set_needs_separate_specular", "get_needs_separate_specular");
 
+	ClassDB::bind_method(D_METHOD("set_render_layers", "render_layers"), &CompositorEffect::set_render_layers);
+	ClassDB::bind_method(D_METHOD("get_render_layers"), &CompositorEffect::get_render_layers);
+	ADD_PROPERTY(PropertyInfo(Variant::ARRAY, "render_layers", PROPERTY_HINT_ARRAY_TYPE, MAKE_RESOURCE_TYPE_HINT("CompositorRenderLayer")), "set_render_layers", "get_render_layers");
+
+	ClassDB::bind_method(D_METHOD("get_layer_texture", "render_layer"), &CompositorEffect::get_layer_texture);
+
 	BIND_ENUM_CONSTANT(EFFECT_CALLBACK_TYPE_PRE_OPAQUE)
 	BIND_ENUM_CONSTANT(EFFECT_CALLBACK_TYPE_POST_OPAQUE)
 	BIND_ENUM_CONSTANT(EFFECT_CALLBACK_TYPE_POST_SKY)
@@ -92,7 +99,11 @@ void CompositorEffect::_validate_property(PropertyInfo &p_property) const {
 }
 
 void CompositorEffect::_call_render_callback(int p_effect_callback_type, const RenderData *p_render_data) {
+	// Expose the current frame's render data to get_layer_texture() for the duration of the
+	// callback only (render thread, non-reentrant), so consumers never cache a stale pointer.
+	current_render_data = p_render_data;
 	GDVIRTUAL_CALL(_render_callback, p_effect_callback_type, p_render_data);
+	current_render_data = nullptr;
 }
 
 void CompositorEffect::set_enabled(bool p_enabled) {
@@ -186,6 +197,25 @@ void CompositorEffect::set_needs_separate_specular(bool p_enabled) {
 
 bool CompositorEffect::get_needs_separate_specular() const {
 	return needs_separate_specular;
+}
+
+void CompositorEffect::set_render_layers(const TypedArray<CompositorRenderLayer> &p_render_layers) {
+	render_layers = p_render_layers;
+}
+
+TypedArray<CompositorRenderLayer> CompositorEffect::get_render_layers() const {
+	return render_layers;
+}
+
+RID CompositorEffect::get_layer_texture(const Ref<CompositorRenderLayer> &p_render_layer) const {
+	ERR_FAIL_NULL_V_MSG(current_render_data, RID(), "get_layer_texture() may only be called from within _render_callback().");
+	ERR_FAIL_COND_V_MSG(p_render_layer.is_null(), RID(), "Cannot resolve a layer texture for a null CompositorRenderLayer.");
+
+	Ref<RenderSceneBuffers> rb = current_render_data->get_render_scene_buffers();
+	ERR_FAIL_COND_V(rb.is_null(), RID());
+
+	// Keyed by the layer resource's own object id — the same identity the members reference.
+	return rb->get_compositor_layer_texture(p_render_layer->get_instance_id());
 }
 
 CompositorEffect::CompositorEffect() {
