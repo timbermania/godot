@@ -174,6 +174,19 @@ NOT `--headless`; `scons platform=linuxbsd target=editor dev_build=yes -j24`).
   `is_compositor_layer_supported()`. **Critical-path consequence:** the engine `TEXTURE` seed must ship before the
   game renders — this graduates an *engine* ticket (13) that blocks the game's render ticket (15). Plan:
   `plans/03-game-migration-plan.md`. Graduated 13/14/15.
+- [Build · Step 6: strip FFT policy; guards → invariants/hard-fails; push format/seed down](issues/11-build-strip-fft-policy.md) —
+  **built + verified windowed.** Four items: (1) **FFT policy strip = no-op** — the clean reimpl never
+  ported the spike's coverage-α/A2B10G10R10-clamp/RGB555-quantize; only structural depth-write-off is kept.
+  (2) **Guards → invariants/hard-fails**: size/view_count are structural invariants *by construction* (engine
+  allocates the target); resolved-depth-null is `ERR_FAIL_COND_MSG` (renderer bug, named); failed target alloc
+  is `ERR_PRINT_ONCE`+skip (was silent `continue`). (3) **Mobile hard-fail (Q5 = hard-fail)**: mobile
+  `WARN_PRINT_ONCE`→`ERR_PRINT_ONCE` naming the renderer; verified `--rendering-method mobile` now ERRORs,
+  Forward+ still clean. (4) **Format/seed push-down (Step-5 PR-hardening)**: the render thread no longer
+  dereferences the main-thread `CompositorRenderLayer` — format/seed are resolved main-thread-side and pushed
+  as two `int32_t` params through `instance_geometry_set_render_layer` (FUNC3→FUNC5) onto the render instance;
+  `run_layer` ObjectID is now only an identity key. `emit_changed()`+node re-push handles live inspector edits.
+  13 files. Verified via the unchanged Step-5 harness (visible→`255,0,0,255`, occluded→`0,0,0,0`), mobile ERR,
+  comparator tests 5/5. **The PR surface is now review-clean on the data-race axis.**
 - [Define the proof scene and capture method](issues/04-proof-scene-and-capture.md) — **resolved
   (grilling).** The champion-earning proof is the **DEMI2 (E046) single-held-particle A/B fold-color
   audit re-run on the new `compositor_layer` engine** — NOT a combat screenshot. The `with − without`
@@ -189,11 +202,11 @@ NOT `--headless`; `scons platform=linuxbsd target=editor dev_build=yes -j24`).
 
 <!-- in-scope fog; graduates as tickets resolve -->
 - **Build the engine primitive** — GRADUATED (2026-07-31, ticket 02) into 7 task tickets **06–12** (Steps
-  1–7). **06 + 07 + 08 + 09 + 10 resolved** (first end-to-end pixels landed). Build frontier = **11 & 12**
-  (both dep 10 met, now takeable in parallel): **11** = strip FFT policy + convert guard-rails to
-  invariants/hard-fails — **also fold in the Step-5 hardening: push `format`/`seed_source` down as value
-  config so the pass stops reading a `Resource` on the render thread**; **12** = `get_layer_texture` accessor
-  + `render_layers` effect property + capability method + class-ref docs (Step 7).
+  1–7). **06 + 07 + 08 + 09 + 10 + 11 resolved** (first end-to-end pixels landed; FFT policy stripped, guards
+  hardened, render-thread `Resource` read eliminated). Build frontier = **12** alone (Step 7): `get_layer_texture`
+  accessor + `render_layers` effect property + `is_compositor_layer_supported()` capability method + class-ref
+  docs. Step 11 already landed the render-thread hardening, so 12 is the last engine step before the PR surface
+  is complete.
 - **`TEXTURE` seed source** — GRADUATED (2026-08-01, ticket 03) into engine ticket **13**, and promoted from
   fast-follow to **critical path** (the FFT proof's sub/mix modes require the display-space seed). `SCENE_COLOR`
   ruled out of the engine (documented v2 extension only, not a ticket).
