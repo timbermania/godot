@@ -105,12 +105,20 @@ NOT `--headless`; `scons platform=linuxbsd target=editor dev_build=yes -j24`).
   steps, file:line-grounded): `.scratch/compositor-spike/plans/02-engine-implementation-plan.md`. Confirmed
   defaults: exact-`int32` order key; v1 seeds CLEAR+bound-Texture, `SCENE_COLOR` deferred (ticket 03 must
   validate the FFT seed maps to bound-Texture).
+- [Build · Step 1: pure caller-order comparator](issues/06-build-order-comparator.md) — **built + green.**
+  `compositor_layer_order_sort.h` (`CompositorLayerOrderComparator` + `compute_order(uint32_t*, const
+  int32_t*, uint32_t)`) ported from SPIKE `fold_order_sort.h`, re-keyed `float`→`int32_t` (NaN
+  canonicalization dropped — an int can't be NaN); test 5/5, 18 assertions pass under `tests=yes`.
+  **Reusable finding:** `tests/SCsub` auto-globs `tests/**/*.cpp` + auto-generates `force_link.gen.h`
+  from each `TEST_FORCE_LINK` — **no `test_main.cpp` edit needed** for this or future test steps.
+  Uncommitted working-tree change.
 
 ## Not yet specified
 
 <!-- in-scope fog; graduates as tickets resolve -->
 - **Build the engine primitive** — GRADUATED (2026-07-31, ticket 02) into 7 task tickets **06–12** (Steps
-  1–7). Build frontier = 06/07/08 (parallelizable, no deps); 09 blocked-by 06+07+08; 10 by 09; 11 & 12 by 10.
+  1–7). **06 resolved.** Build frontier = **07/08** (parallelizable, no deps); 09 blocked-by 06+07+08
+  (06 now done); 10 by 09; 11 & 12 by 10.
 - **Migrate the game fold onto the new primitive** (the game-side edits) — graduates once the
   migration plan (ticket 03) lands.
 - **Build/run recipe for the game against the new engine** (analogue of `spike-fold-run-invocation`
