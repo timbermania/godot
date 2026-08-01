@@ -112,13 +112,22 @@ NOT `--headless`; `scons platform=linuxbsd target=editor dev_build=yes -j24`).
   **Reusable finding:** `tests/SCsub` auto-globs `tests/**/*.cpp` + auto-generates `force_link.gen.h`
   from each `TEST_FORCE_LINK` — **no `test_main.cpp` edit needed** for this or future test steps.
   Uncommitted working-tree change.
+- [Build · Step 2: register `compositor_layer` render_mode + shader-variant flag + Mobile gate](issues/07-build-render-mode-registration.md) —
+  **built + verified.** The general `compositor_layer` render_mode registered globally
+  (`shader_types.cpp`) + a `compositor_layer` shader-variant bool bound on both Forward+ and Mobile
+  scene shaders (mirror of SPIKE `compositor_fold`, renamed); no routing, no behavioral change. 6
+  files, +20/−0. Coverage-α / depth-write-off deliberately NOT ported (Step 6 policy). Verified
+  **windowed** (positive+negative controls): Forward+ parses `compositor_layer` cleanly while a bogus
+  mode errors; Mobile parses it AND fires the "Forward+ only" WARN. **Reusable:** `--rendering-method
+  mobile` on one project exercises the Mobile path (no separate project); parse-check harness kept at
+  `/tmp/step2-check/`. Uncommitted working-tree change.
 
 ## Not yet specified
 
 <!-- in-scope fog; graduates as tickets resolve -->
 - **Build the engine primitive** — GRADUATED (2026-07-31, ticket 02) into 7 task tickets **06–12** (Steps
-  1–7). **06 resolved.** Build frontier = **07/08** (parallelizable, no deps); 09 blocked-by 06+07+08
-  (06 now done); 10 by 09; 11 & 12 by 10.
+  1–7). **06 + 07 resolved.** Build frontier = **08** (no deps); 09 blocked-by 06+07+08 (06+07 now done,
+  waits only on 08); 10 by 09; 11 & 12 by 10.
 - **Migrate the game fold onto the new primitive** (the game-side edits) — graduates once the
   migration plan (ticket 03) lands.
 - **Build/run recipe for the game against the new engine** (analogue of `spike-fold-run-invocation`
