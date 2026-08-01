@@ -126,6 +126,7 @@
 #include "scene/resources/canvas_item_material.h"
 #include "scene/resources/color_palette.h"
 #include "scene/resources/compositor.h"
+#include "scene/resources/compositor_render_layer.h"
 #include "scene/resources/compressed_texture.h"
 #include "scene/resources/compressed_texture_resource_format.h"
 #include "scene/resources/curve_texture.h"
@@ -928,6 +929,7 @@ void register_scene_types() {
 	GDREGISTER_CLASS(PhysicsMaterial);
 #endif // !defined(PHYSICS_2D_DISABLED) || !defined(PHYSICS_3D_DISABLED)
 	GDREGISTER_CLASS(Compositor);
+	GDREGISTER_CLASS(CompositorRenderLayer);
 	GDREGISTER_CLASS(Environment);
 	GDREGISTER_VIRTUAL_CLASS(CameraAttributes);
 	GDREGISTER_CLASS(CameraAttributesPhysical);

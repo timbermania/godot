@@ -43,6 +43,7 @@
 
 #define RB_SCOPE_BUFFERS SNAME("render_buffers")
 #define RB_SCOPE_VRS SNAME("VRS")
+#define RB_SCOPE_COMPOSITOR_LAYER SNAME("compositor_layer")
 
 #define RB_TEXTURE SNAME("texture")
 #define RB_TEX_COLOR SNAME("color")
@@ -223,6 +224,14 @@ public:
 	Size2i get_texture_slice_size(const StringName &p_context, const StringName &p_texture_name, const uint32_t p_mipmap);
 
 	void clear_context(const StringName &p_context);
+
+	// Compositor render layers (held-out targets).
+	// Engine-owned, allocate-on-first-access target keyed by a CompositorRenderLayer's
+	// identity (its object id). Two references to the same layer resource resolve to one
+	// target; size (internal render size) and view_count are structural invariants taken
+	// from the scene render buffers, never from the caller. Format is fixed by the layer
+	// resource at first access. Freed with the rest of the named textures in cleanup().
+	RID get_compositor_layer_texture(uint64_t p_layer_id, RD::DataFormat p_data_format);
 
 	// Allocate shared buffers
 	void allocate_blur_textures();

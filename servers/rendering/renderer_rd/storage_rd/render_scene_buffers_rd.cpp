@@ -509,6 +509,22 @@ void RenderSceneBuffersRD::clear_context(const StringName &p_context) {
 	}
 }
 
+RID RenderSceneBuffersRD::get_compositor_layer_texture(uint64_t p_layer_id, RD::DataFormat p_data_format) {
+	ERR_FAIL_COND_V_MSG(p_layer_id == 0, RID(), "Compositor render layer identity must be a valid object id.");
+
+	// Key on the layer resource's object id so every reference to the same resource
+	// resolves to a single engine-allocated target (no first-writer-wins aliasing).
+	const StringName layer_name = itos(p_layer_id);
+	if (has_texture(RB_SCOPE_COMPOSITOR_LAYER, layer_name)) {
+		return get_texture(RB_SCOPE_COMPOSITOR_LAYER, layer_name);
+	}
+
+	// Size and view_count are structural invariants: the target matches the scene's
+	// internal render size and view count by construction, single-sampled (post-resolve).
+	const uint32_t usage_bits = RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT | RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT;
+	return create_texture(RB_SCOPE_COMPOSITOR_LAYER, layer_name, p_data_format, usage_bits, RD::TEXTURE_SAMPLES_1, internal_size, view_count, 1, true, false);
+}
+
 // Allocate shared buffers
 void RenderSceneBuffersRD::allocate_blur_textures() {
 	if (has_texture(RB_SCOPE_BUFFERS, RB_TEX_BLUR_0)) {

@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="CompositorRenderLayer" inherits="Resource" api_type="core" experimental="The implementation may change as more of the rendering internals are exposed over time." xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../class.xsd">
+	<brief_description>
+		Identity token for a compositor render layer: a held-out render target drawn into by member materials and composited back by a [CompositorEffect].
+	</brief_description>
+	<description>
+		A [CompositorRenderLayer] names a held-out render target. Materials that use [code]render_mode compositor_layer[/code] and reference this resource are drawn into that target instead of the main scene, in caller-controlled order, then a [CompositorEffect] composites the target back into the scene at the declared [member stage].
+		This resource is purely an identity and a small set of declarations ([member format], [member seed_source], [member stage]); it is not a policy container. The target's size, view count and depth source are engine-owned structural invariants that match the scene render target by construction. The engine allocates exactly one target per distinct [CompositorRenderLayer] instance, so several materials referencing the same resource share one layer.
+		[b]Note:[/b] This is an experimental rendering feature and only supported by the Forward+ rendering method.
+	</description>
+	<tutorials>
+	</tutorials>
+	<members>
+		<member name="format" type="int" setter="set_format" getter="get_format" enum="CompositorRenderLayer.Format" default="0">
+			The color format of the layer target, from the enumerated compositor format set. [constant FORMAT_INHERIT_SCENE_COLOR] matches the scene's base color format.
+		</member>
+		<member name="seed_source" type="int" setter="set_seed_source" getter="get_seed_source" enum="CompositorRenderLayer.SeedSource" default="0">
+			How the layer target is initialized before its members draw. [constant SEED_SOURCE_CLEAR] and [constant SEED_SOURCE_TEXTURE] are supported; [constant SEED_SOURCE_SCENE_COLOR] is reserved for a future version.
+		</member>
+		<member name="stage" type="int" setter="set_stage" getter="get_stage" enum="CompositorEffect.EffectCallbackType" default="4">
+			The pipeline stage at which the layer is drawn and made available to consuming effects. Defaults to after the transparent pass (post-resolve).
+		</member>
+	</members>
+	<constants>
+		<constant name="FORMAT_INHERIT_SCENE_COLOR" value="0" enum="Format">
+			Use the scene's base color format for the layer target.
+		</constant>
+		<constant name="FORMAT_RGBA8" value="1" enum="Format">
+			8 bits per channel RGBA unsigned normalized.
+		</constant>
+		<constant name="FORMAT_RGB10_A2" value="2" enum="Format">
+			10 bits per RGB channel plus 2-bit alpha, unsigned normalized.
+		</constant>
+		<constant name="FORMAT_RGBA16F" value="3" enum="Format">
+			16 bits per channel RGBA half-float.
+		</constant>
+		<constant name="FORMAT_R8" value="4" enum="Format">
+			Single 8-bit unsigned normalized channel.
+		</constant>
+		<constant name="FORMAT_R16UI" value="5" enum="Format">
+			Single 16-bit unsigned integer channel.
+		</constant>
+		<constant name="FORMAT_MAX" value="6" enum="Format">
+			Represents the size of the [enum Format] enum.
+		</constant>
+		<constant name="SEED_SOURCE_CLEAR" value="0" enum="SeedSource">
+			Clear the layer target before its members draw.
+		</constant>
+		<constant name="SEED_SOURCE_SCENE_COLOR" value="1" enum="SeedSource">
+			Seed the layer target from the resolved scene color. Reserved for a future version.
+		</constant>
+		<constant name="SEED_SOURCE_TEXTURE" value="2" enum="SeedSource">
+			Seed the layer target from a bound texture.
+		</constant>
+		<constant name="SEED_SOURCE_MAX" value="3" enum="SeedSource">
+			Represents the size of the [enum SeedSource] enum.
+		</constant>
+	</constants>
+</class>
