@@ -197,15 +197,32 @@ NOT `--headless`; `scons platform=linuxbsd target=editor dev_build=yes -j24`).
   proof targets the color path only. ⚠️ **This refines the destination's "fold in a real FFT scene"
   proof bar → measured A/B diff.** Capture windowed; gated on migration (14 + 15); additive target needs
   only CLEAR seed (ticket 13 = sub/mix only). Handoff: `plans/04-demi2-proof-handoff.md`.
+- [Build · Step 7: public consumer surface + docs](issues/12-build-public-surface-docs.md) — **built +
+  verified windowed; the engine primitive's public surface is complete (steps 06–12 all resolved).** Commit
+  `377b27e373` (+115/−0, 10 files). Three new surfaces: (1) `CompositorEffect.render_layers :
+  CompositorRenderLayer[]` — declarative exported property, NOT pushed to RS (the held-out pass allocates
+  from the *instances'* refs, Step 4/5); (2) `get_layer_texture(layer) → RID`, valid only during
+  `_render_callback` (caches `current_render_data` for the callback's duration), resolves by the same
+  resource object — no string, no index; (3) `RenderingServer.is_compositor_layer_supported()` (Forward+
+  only; `has_method` feature-detect). **Layering decision:** added a read-only base virtual
+  `RenderSceneBuffers::get_compositor_layer_texture(id) const` (RD overrides, **never allocates**; distinct
+  from Step 3's allocating 2-arg overload) so `scene/` never depends on `renderer_rd`. Docs: CompositorEffect
+  + RenderingServer + GeometryInstance3D `render_layer`/`render_layer_order` (was a 🔴 in the upstream-eval);
+  doctool zero-drift, idempotent. Verified `/tmp/step7-check`: accessor returns the member-drawn target
+  (`255,0,0,255`) **and equals** the render-side string-path RID; render_layers round-trips; mobile gate =
+  false. **Engine remaining = ticket 13 only.**
 
 ## Not yet specified
 
 <!-- in-scope fog; graduates as tickets resolve -->
 - **Build the engine primitive** — GRADUATED (2026-07-31, ticket 02) into 7 task tickets **06–12** (Steps
-  1–7). **06 + 07 + 08 + 09 + 10 + 11 resolved** (first end-to-end pixels landed; FFT policy stripped, guards
-  hardened, render-thread `Resource` read eliminated). Build frontier = **12** alone (Step 7): `get_layer_texture`
-  accessor + `render_layers` effect property + `is_compositor_layer_supported()` capability method + class-ref
-  docs. Step 11 already landed the render-thread hardening, so 12 is the last engine step before the PR surface
+  1–7). **DONE — all seven resolved** (2026-08-01, Step 7). The general material-side primitive is fully
+  built: comparator, `compositor_layer` render_mode, `CompositorRenderLayer` resource + engine-owned target,
+  per-instance membership + fill routing, the held-out pass (first pixels), FFT-policy strip + render-thread
+  hardening, and now the public consumer surface (`render_layers` / `get_layer_texture` /
+  `is_compositor_layer_supported`) + class-ref docs. **The only remaining engine work is ticket 13** (the
+  `TEXTURE` seed, tracked in its own fog line below). Historical note: Step 11 landed the render-thread
+  hardening, so 12 was the last of the seven — the PR surface
   is complete.
 - **`TEXTURE` seed source** — GRADUATED (2026-08-01, ticket 03) into engine ticket **13**, and promoted from
   fast-follow to **critical path** (the FFT proof's sub/mix modes require the display-space seed). `SCENE_COLOR`
