@@ -402,8 +402,13 @@ float GeometryInstance3D::get_lod_bias() const {
 }
 
 void GeometryInstance3D::set_render_layer(const Ref<CompositorRenderLayer> &p_render_layer) {
+	bool was_valid = render_layer.is_valid();
 	render_layer = p_render_layer;
 	RS::get_singleton()->instance_geometry_set_render_layer(get_instance(), render_layer.is_valid() ? render_layer->get_instance_id() : ObjectID(), render_layer_order);
+	if (was_valid != render_layer.is_valid()) {
+		// Membership toggled: show/hide the render_layer_order field in the inspector.
+		notify_property_list_changed();
+	}
 }
 
 Ref<CompositorRenderLayer> GeometryInstance3D::get_render_layer() const {
@@ -561,6 +566,11 @@ PackedStringArray GeometryInstance3D::get_configuration_warnings() const {
 void GeometryInstance3D::_validate_property(PropertyInfo &p_property) const {
 	if (p_property.name == "sorting_offset" || p_property.name == "sorting_use_aabb_center") {
 		p_property.usage = PROPERTY_USAGE_DEFAULT;
+	}
+	if (p_property.name == "render_layer_order" && render_layer.is_null()) {
+		// The caller-order key is only meaningful once the instance is a compositor
+		// render-layer member; keep it stored but hide it from the inspector otherwise.
+		p_property.usage = PROPERTY_USAGE_NO_EDITOR;
 	}
 }
 

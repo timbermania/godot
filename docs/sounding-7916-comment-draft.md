@@ -47,6 +47,12 @@ needing only **two things #7916 doesn't currently have**:
 - Given membership stays **material-based** (adopting your GPU-driven constraint), are those two additions — a
   **caller-order key within a pass** and a **held-out target the compositor seeds/composites in-frame** —
   acceptable extensions, or do they conflict with something in the design I'm not seeing?
+- On the order key's *surface* specifically (veto-on-review): a **dedicated per-instance `int32` key** vs.
+  **reusing the existing `sorting_offset`** with documented order semantics? I have it working as a typed
+  `render_layer_order` (exact — no depth-bias overload, no float ULP cliff at large indices), but it's a small
+  diff to fall back to reusing `sorting_offset` if you'd rather not grow the per-instance / inspector surface.
+  Order must be per-*instance* (two instances of one material need different orders), so `render_priority`
+  (material-level, 8-bit) can't serve it either way.
 
 If this direction is welcome, I'm happy to do the implementation work; I'm asking first rather than opening a PR
 against an unsettled design.
