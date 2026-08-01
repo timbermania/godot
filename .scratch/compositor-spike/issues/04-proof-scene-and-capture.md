@@ -1,7 +1,8 @@
 # Define the proof scene and capture method
 
 Type: grilling
-Status: open
+Status: closed
+Assignee: Aaron Curry
 Blocked by: —
 
 ## Question
@@ -25,4 +26,26 @@ graduates once the game runs on the new engine (tickets 02 + 03).
 
 ## Answer
 
-<!-- filled on resolution -->
+**Resolved (grilling). The proof is the DEMI2 (E046) single-held-particle A/B fold-color audit,
+re-run on the new `compositor_layer` engine — NOT a combat-scene screenshot.**
+
+1. **Scene/proof:** the DEMI2 rig (`tools/proto_single_held_particle.gd`, EffectViewer at 256×240,
+   emitter 2 → seq 2 additive magenta particle, `--fs=26`, held age 7), driven from the game repo.
+   The `with − without` diff on flat mid-gray 128 isolates the fold's exact per-channel contribution.
+   GPUArena/ScenarioPlayer/Formation were considered and dropped — a measured diff proves the
+   hardest-to-fake claim (material-shaded held-out geometry contributing correct pixels) far more
+   rigorously than a screenshot.
+2. **What must be correct:** per-channel R:G:B ratio matches the PCSX oracle (no overbright/ratio
+   shift); the migrated `compositor_layer` fold reproduces the stock contribution. Occlusion (C) and
+   caller-order (D) are already proven at the engine level by RD readback (tickets 09 + 10), so the
+   game proof targets the end-to-end **color** path only.
+3. **Capture:** windowed (RenderingDevice required, NOT `--headless`), `with`/`without`/`diff` PNGs +
+   energy table stored under `research/working_documents/demi2_fold_audit/` tagged `new-engine`; on a
+   faithful result, restore the "working fork proves the capability" line to
+   `docs/sounding-7916-comment-draft.md` and link the artifact. User posts the sounding themselves.
+
+**Preconditions (gates the capture):** engine built on `feature/render-to-compositor` + game migrated
+onto `compositor_layer` (tickets 14 + 15). The additive seq-2 target only needs CLEAR seed; the
+`TEXTURE` seed (ticket 13) is required only if the proof set is extended to sub/mix particles.
+
+**Handoff:** `.scratch/compositor-spike/plans/04-demi2-proof-handoff.md`.

@@ -174,6 +174,16 @@ NOT `--headless`; `scons platform=linuxbsd target=editor dev_build=yes -j24`).
   `is_compositor_layer_supported()`. **Critical-path consequence:** the engine `TEXTURE` seed must ship before the
   game renders — this graduates an *engine* ticket (13) that blocks the game's render ticket (15). Plan:
   `plans/03-game-migration-plan.md`. Graduated 13/14/15.
+- [Define the proof scene and capture method](issues/04-proof-scene-and-capture.md) — **resolved
+  (grilling).** The champion-earning proof is the **DEMI2 (E046) single-held-particle A/B fold-color
+  audit re-run on the new `compositor_layer` engine** — NOT a combat screenshot. The `with − without`
+  diff on flat mid-gray 128 (`tools/proto_single_held_particle.gd`, emitter 2 → seq 2 additive magenta,
+  `--fs=26`) isolates the fold's exact per-channel contribution vs the PCSX oracle — proving axis **B**
+  (material-shaded held-out geometry contributes correct pixels) numerically. **C** (occlusion) + **D**
+  (caller-order) are already proven at the engine level by RD readback (tickets 09 + 10), so the game
+  proof targets the color path only. ⚠️ **This refines the destination's "fold in a real FFT scene"
+  proof bar → measured A/B diff.** Capture windowed; gated on migration (14 + 15); additive target needs
+  only CLEAR seed (ticket 13 = sub/mix only). Handoff: `plans/04-demi2-proof-handoff.md`.
 
 ## Not yet specified
 
@@ -192,8 +202,10 @@ NOT `--headless`; `scons platform=linuxbsd target=editor dev_build=yes -j24`).
   (Pass A/C retarget + seed-texture wiring + autopilot gate; blocked by 13 + 14 → first game-scene pixels).
 - **Build/run recipe for the game against the new engine** (analogue of `spike-fold-run-invocation`) — folded into
   ticket **15** (documented + saved as a memory note once the fold renders windowed).
+- **Capture the DEMI2 A/B proof** (ticket 04 defined it; `plans/04-demi2-proof-handoff.md`) — graduates once the
+  migrated game runs on the new engine (after 14 + 15). User runs it from the game repo; not yet a ticket.
 - **Restore the "working fork proves it" line** to `docs/sounding-7916-comment-draft.md` — graduates
-  once the fold renders in-scene (the last in-scope step before the destination).
+  once the DEMI2 A/B diff comes back faithful (the last in-scope step before the destination).
 
 ## Out of scope
 
