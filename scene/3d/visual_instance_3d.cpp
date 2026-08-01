@@ -401,10 +401,35 @@ float GeometryInstance3D::get_lod_bias() const {
 	return lod_bias;
 }
 
+// Push the current membership down to the RenderingServer, resolving the CompositorRenderLayer's
+// format/seed_source to plain enum values HERE (main thread). The render thread then reads those values
+// off the render instance and never dereferences the resource. Re-invoked when the resource emits
+// `changed`, so editing its format/seed in the inspector takes effect live.
+void GeometryInstance3D::_update_render_layer() {
+	ObjectID layer_id;
+	int format = 0;
+	int seed_source = 0;
+	if (render_layer.is_valid()) {
+		layer_id = render_layer->get_instance_id();
+		format = render_layer->get_format();
+		seed_source = render_layer->get_seed_source();
+	}
+	RS::get_singleton()->instance_geometry_set_render_layer(get_instance(), layer_id, render_layer_order, format, seed_source);
+}
+
 void GeometryInstance3D::set_render_layer(const Ref<CompositorRenderLayer> &p_render_layer) {
+	if (render_layer == p_render_layer) {
+		return;
+	}
 	bool was_valid = render_layer.is_valid();
+	if (render_layer.is_valid()) {
+		render_layer->disconnect(CoreStringName(changed), callable_mp(this, &GeometryInstance3D::_update_render_layer));
+	}
 	render_layer = p_render_layer;
-	RS::get_singleton()->instance_geometry_set_render_layer(get_instance(), render_layer.is_valid() ? render_layer->get_instance_id() : ObjectID(), render_layer_order);
+	if (render_layer.is_valid()) {
+		render_layer->connect(CoreStringName(changed), callable_mp(this, &GeometryInstance3D::_update_render_layer));
+	}
+	_update_render_layer();
 	if (was_valid != render_layer.is_valid()) {
 		// Membership toggled: show/hide the render_layer_order field in the inspector.
 		notify_property_list_changed();
@@ -417,7 +442,7 @@ Ref<CompositorRenderLayer> GeometryInstance3D::get_render_layer() const {
 
 void GeometryInstance3D::set_render_layer_order(int p_order) {
 	render_layer_order = p_order;
-	RS::get_singleton()->instance_geometry_set_render_layer(get_instance(), render_layer.is_valid() ? render_layer->get_instance_id() : ObjectID(), render_layer_order);
+	_update_render_layer();
 }
 
 int GeometryInstance3D::get_render_layer_order() const {

@@ -475,9 +475,13 @@ public:
 		float sorting_offset = 0.0;
 		bool use_aabb_center = true;
 
-		// compositor render-layer membership (stored so it survives geometry_instance rebuilds)
+		// compositor render-layer membership (stored so it survives geometry_instance rebuilds).
+		// render_layer_format/render_layer_seed_source are the member's CompositorRenderLayer config
+		// pushed down to plain enum values on the main thread, so the render thread never reads the resource.
 		ObjectID render_layer;
 		int32_t render_layer_order = 0;
+		int32_t render_layer_format = 0;
+		int32_t render_layer_seed_source = 0;
 
 		Vector<Color> lightmap_target_sh; //target is used for incrementally changing the SH over time, this avoids pops in some corner cases and when going interior <-> exterior
 
@@ -1034,7 +1038,7 @@ public:
 	virtual void instance_set_surface_override_material(RID p_instance, int p_surface, RID p_material);
 	virtual void instance_set_visible(RID p_instance, bool p_visible);
 	virtual void instance_geometry_set_transparency(RID p_instance, float p_transparency);
-	virtual void instance_geometry_set_render_layer(RID p_instance, ObjectID p_layer_id, int32_t p_render_layer_order);
+	virtual void instance_geometry_set_render_layer(RID p_instance, ObjectID p_layer_id, int32_t p_render_layer_order, int32_t p_format, int32_t p_seed_source);
 
 	virtual void instance_teleport(RID p_instance);
 

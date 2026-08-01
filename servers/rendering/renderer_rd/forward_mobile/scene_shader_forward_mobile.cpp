@@ -192,9 +192,10 @@ void SceneShaderForwardMobile::ShaderData::set_code(const String &p_code) {
 
 	if (compositor_layer) {
 		// The compositor render-layer pass only exists in the Forward+ (clustered) renderer. On Mobile there
-		// is no such list, so this flag is inert and the material renders through the normal pass. Warn loudly
-		// rather than silently producing wrong output.
-		WARN_PRINT_ONCE("compositor_layer render_mode is only supported on the Forward+ renderer; it is ignored on Mobile. The flagged material will fall back to the normal pass and will NOT composite correctly.");
+		// is no such list, so the flag cannot be honored. This is a genuinely unsupported config (not a
+		// recoverable warning): hard-fail naming the renderer rather than silently rendering the member
+		// through the normal pass with wrong blending.
+		ERR_PRINT_ONCE("compositor_layer render_mode is not supported on the Mobile renderer (Forward+ only). The flagged material cannot be composited; use the Forward+ rendering method.");
 	}
 
 	depth_draw = DepthDraw(depth_drawi);

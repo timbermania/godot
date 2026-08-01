@@ -150,6 +150,8 @@ private:
 
 	const StringName *_instance_uniform_get_remap(const StringName &p_name) const;
 
+	void _update_render_layer();
+
 protected:
 	bool _set(const StringName &p_name, const Variant &p_value);
 	bool _get(const StringName &p_name, Variant &r_ret) const;

@@ -55,7 +55,8 @@ public:
 	virtual void set_layer_mask(uint32_t p_layer_mask) = 0;
 	// Compositor render-layer membership: `p_layer_id` is the identity of the instance's
 	// `CompositorRenderLayer` resource (0 = not a member); `p_render_layer_order` is the caller-order key.
-	virtual void set_render_layer(ObjectID p_layer_id, int32_t p_render_layer_order) = 0;
+	// `p_format`/`p_seed_source` are that resource's config pushed down to plain enum values (no render-thread deref).
+	virtual void set_render_layer(ObjectID p_layer_id, int32_t p_render_layer_order, int32_t p_format, int32_t p_seed_source) = 0;
 	virtual void set_fade_range(bool p_enable_near, float p_near_begin, float p_near_end, bool p_enable_far, float p_far_begin, float p_far_end) = 0;
 	virtual void set_parent_fade_alpha(float p_alpha) = 0;
 	virtual void set_transparency(float p_transparency) = 0;
@@ -105,9 +106,13 @@ public:
 
 	// Compositor render-layer membership. `render_layer` is the identity of the member's
 	// CompositorRenderLayer resource (null = not a member); `render_layer_order` is the exact
-	// caller-order key the RENDER_LIST_COMPOSITOR_LAYER list sorts by.
+	// caller-order key the RENDER_LIST_COMPOSITOR_LAYER list sorts by. `render_layer_format` and
+	// `render_layer_seed_source` are that resource's config pushed down to plain enum values on the
+	// main thread, so the render thread reads them here instead of dereferencing the resource.
 	ObjectID render_layer;
 	int32_t render_layer_order = 0;
+	int32_t render_layer_format = 0;
+	int32_t render_layer_seed_source = 0;
 
 	bool fade_near = false;
 	float fade_near_begin = 0;
@@ -151,7 +156,7 @@ public:
 	virtual void set_pivot_data(float p_sorting_offset, bool p_use_aabb_center) override;
 	virtual void set_lod_bias(float p_lod_bias) override;
 	virtual void set_layer_mask(uint32_t p_layer_mask) override;
-	virtual void set_render_layer(ObjectID p_layer_id, int32_t p_render_layer_order) override;
+	virtual void set_render_layer(ObjectID p_layer_id, int32_t p_render_layer_order, int32_t p_format, int32_t p_seed_source) override;
 	virtual void set_fade_range(bool p_enable_near, float p_near_begin, float p_near_end, bool p_enable_far, float p_far_begin, float p_far_end) override;
 	virtual void set_parent_fade_alpha(float p_alpha) override;
 	virtual void set_transparency(float p_transparency) override;

@@ -2521,35 +2521,39 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 
 		RenderList &layer_list = render_list[RENDER_LIST_COMPOSITOR_LAYER];
 		const uint32_t layer_element_count = layer_list.elements.size();
+		// The engine allocates each layer target itself, so target size = render-target size and
+		// view_count = scene view_count *by construction*. The spike's warn-and-continue size/MSAA/
+		// view-count guards are therefore structural invariants here — no runtime check needed.
 		const uint32_t layer_view_count = p_render_data->scene_data->view_count;
 		const uint32_t compositor_layer_color_pass_flags = (color_pass_flags | uint32_t(COLOR_PASS_FLAG_TRANSPARENT)) & ~uint32_t(COLOR_PASS_FLAG_SEPARATE_SPECULAR) & ~uint32_t(COLOR_PASS_FLAG_MOTION_VECTORS);
 		const RID depth_texture = rb->get_depth_texture();
 		const RD::DataFormat scene_color_format = rb->get_base_data_format();
 
+		// The shared resolved scene depth must exist — this pass runs after the transparent resolve, so a
+		// null here is a renderer bug, not a user misconfiguration. Hard-fail naming the renderer.
+		ERR_FAIL_COND_MSG(depth_texture.is_null(), "RenderForwardClustered: compositor render-layer pass has no resolved scene depth texture; cannot occlude held-out members.");
+
 		// Walk contiguous per-layer runs (sort_by_layer_order grouped the list by layer identity). Each
 		// run draws into its own engine-owned target. The single-fold proof has exactly one run.
 		uint32_t run_start = 0;
 		while (run_start < layer_element_count) {
-			const ObjectID run_layer = layer_list.elements[run_start]->owner->render_layer;
+			const GeometryInstanceForwardClustered *run_owner = layer_list.elements[run_start]->owner;
+			const ObjectID run_layer = run_owner->render_layer;
 			uint32_t run_end = run_start + 1;
 			while (run_end < layer_element_count && layer_list.elements[run_end]->owner->render_layer == run_layer) {
 				run_end++;
 			}
 			const uint32_t run_size = run_end - run_start;
 
-			// Resolve the layer resource for its declared format + seed. NOTE: this reads a main-thread
-			// Resource from the render thread — acceptable for the spike, but harden before the PR by
-			// pushing format/seed down as value config on the render instance (mirroring how
-			// CompositorEffect copies its config into RS storage).
-			CompositorRenderLayer *layer_res = Object::cast_to<CompositorRenderLayer>(ObjectDB::get_instance(run_layer));
-			if (layer_res == nullptr || depth_texture.is_null()) {
-				run_start = run_end;
-				continue;
-			}
-
-			const RD::DataFormat layer_format = _compositor_layer_rd_format(layer_res->get_format(), scene_color_format);
+			// Format + seed are read from the render instance (pushed down from the CompositorRenderLayer
+			// resource on the main thread by GeometryInstance3D::_update_render_layer). The render thread
+			// never dereferences the (main-thread-owned) resource — run_layer is only an identity key.
+			const RD::DataFormat layer_format = _compositor_layer_rd_format(run_owner->render_layer_format, scene_color_format);
 			const RID layer_texture = rb->get_compositor_layer_texture(run_layer, layer_format);
 			if (layer_texture.is_null()) {
+				// Allocation of the engine-owned target failed (e.g. an unsupported format on this device).
+				// Skip the run loudly rather than drawing into a null framebuffer.
+				ERR_PRINT_ONCE("RenderForwardClustered: failed to allocate a compositor render-layer target; skipping the layer.");
 				run_start = run_end;
 				continue;
 			}
@@ -2561,7 +2565,7 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 			// SCENE_COLOR seeds are deferred — fall back to CLEAR so members never draw over garbage.
 			Vector<Color> clear_colors;
 			clear_colors.push_back(Color(0, 0, 0, 0));
-			if (layer_res->get_seed_source() != CompositorRenderLayer::SEED_SOURCE_CLEAR) {
+			if (run_owner->render_layer_seed_source != CompositorRenderLayer::SEED_SOURCE_CLEAR) {
 				WARN_PRINT_ONCE("compositor_layer: only SEED_SOURCE_CLEAR is implemented; seeding the layer target with CLEAR.");
 			}
 

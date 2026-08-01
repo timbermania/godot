@@ -61,7 +61,11 @@ void CompositorRenderLayer::_bind_methods() {
 
 void CompositorRenderLayer::set_format(Format p_format) {
 	ERR_FAIL_INDEX(p_format, FORMAT_MAX);
+	if (format == p_format) {
+		return;
+	}
 	format = p_format;
+	emit_changed();
 }
 
 CompositorRenderLayer::Format CompositorRenderLayer::get_format() const {
@@ -70,7 +74,11 @@ CompositorRenderLayer::Format CompositorRenderLayer::get_format() const {
 
 void CompositorRenderLayer::set_seed_source(SeedSource p_seed_source) {
 	ERR_FAIL_INDEX(p_seed_source, SEED_SOURCE_MAX);
+	if (seed_source == p_seed_source) {
+		return;
+	}
 	seed_source = p_seed_source;
+	emit_changed();
 }
 
 CompositorRenderLayer::SeedSource CompositorRenderLayer::get_seed_source() const {
