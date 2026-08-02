@@ -2569,8 +2569,9 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 			//   TEXTURE — copy the layer's bound seed_texture into the target here, then LOAD it in the draw
 			//             (so sub/mix members read the display-space scene in place). The bound RID is resolved
 			//             to its current RD texture at pass time, so a live per-frame texture works.
-			// A TEXTURE that is missing or mismatched, and the deferred SCENE_COLOR source, fall back to CLEAR
-			// so members never draw over garbage.
+			// A TEXTURE that is missing or mismatched falls back to CLEAR so members never draw over garbage.
+			// (A SCENE_COLOR seed is a named future extension — gated behind an engine-written coverage channel —
+			// and is deliberately not part of the shipped SeedSource enum yet; see the proposal.)
 			bool seeded_from_texture = false;
 			if (run_owner->render_layer_seed_source == CompositorRenderLayer::SEED_SOURCE_TEXTURE) {
 				const RID seed_rd = run_owner->render_layer_seed_texture.is_valid() ? texture_storage->texture_get_rd_texture(run_owner->render_layer_seed_texture) : RID();
@@ -2587,8 +2588,6 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 						WARN_PRINT_ONCE("compositor_layer: seed_texture format/size does not match the layer target; seeding with CLEAR.");
 					}
 				}
-			} else if (run_owner->render_layer_seed_source == CompositorRenderLayer::SEED_SOURCE_SCENE_COLOR) {
-				WARN_PRINT_ONCE("compositor_layer: SEED_SOURCE_SCENE_COLOR is not implemented in the engine; seeding with CLEAR.");
 			}
 
 			RenderListParameters render_list_params(layer_list.elements.ptr() + run_start, layer_list.element_info.ptr() + run_start, run_size, reverse_cull, PASS_MODE_COLOR, compositor_layer_color_pass_flags, rb_data.is_null(), p_render_data->directional_light_soft_shadows, compositor_layer_rp_uniform_set, get_debug_draw_mode() == RSE::VIEWPORT_DEBUG_DRAW_WIREFRAME, Vector2(), p_render_data->scene_data->lod_distance_multiplier, p_render_data->scene_data->screen_mesh_lod_threshold, layer_view_count, run_start, base_specialization);

@@ -59,11 +59,12 @@ public:
 	};
 
 	// How the layer target is seeded before its members draw. v1 ships CLEAR and a
-	// bound TEXTURE; SCENE_COLOR is declared but deferred (it needs an engine-written
-	// coverage channel to avoid double-exposing the scene — see the proposal).
+	// bound TEXTURE. A SCENE_COLOR seed is a named future extension, deliberately not
+	// exposed here yet: it needs an engine-written coverage channel to avoid
+	// double-exposing the scene (see the proposal), so shipping the enum value before
+	// the engine path exists would be a non-functional public surface.
 	enum SeedSource {
 		SEED_SOURCE_CLEAR,
-		SEED_SOURCE_SCENE_COLOR,
 		SEED_SOURCE_TEXTURE,
 		SEED_SOURCE_MAX,
 	};

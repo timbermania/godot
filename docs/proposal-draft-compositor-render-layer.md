@@ -55,10 +55,14 @@ declared pipeline stage, in a **caller-controlled order**. A `CompositorEffect` 
 target.
 
 This dissolves the wall: a material shades *itself* into the target the effect reads, replacing hundreds of
-lines of hand-synced GLSL with a property and a target declaration. Because opt-in is a **per-instance
-property** (not a shader `render_mode`), **any material participates unchanged — including `StandardMaterial3D`
-— with no shader authoring**, which is what makes it a general render-layer primitive rather than a shader
-trick. It is deliberately shaped as the **transparent / held-out case of #7916**: reuse that proposal's
+lines of hand-synced GLSL with a target declaration and one material change. **Membership is material-based — a
+`render_mode compositor_layer` on the material** — deliberately adopting #7916's rule that pass assignment stays
+material-based so it "remains entirely compatible with GPU driven rendering, where materials are dispatched
+instead of geometry" (reduz, #7916 FAQ). The per-instance surface carries only *which* layer an object joins and
+its draw *order* (§2), never membership — so a held-out surface never fragments its material's indirect-draw
+batch. A `StandardMaterial3D` therefore participates by becoming a `ShaderMaterial` that adds the one `render_mode`
+line (its shading otherwise unchanged); that honest cost is what buys GPU-driven compatibility. It is deliberately
+shaped as the **transparent / held-out case of #7916**: reuse that proposal's
 conventions where they compose (compositor-declared enumerated-format buffers, the `CUSTOM_BUFFER0..N`
 aux-output vocabulary), and address the transparent/held-out layer that #7916's *own reviewers already asked for*
 (darksylinc: "one strong point of compositors is that you can fix the limitations of regular alpha blending…";
@@ -72,7 +76,7 @@ caller-ordered list feeding a named target.
 
 ```
 render full scene EXCLUDING held-out instances       (normal engine render, to completion)
-  → seed the layer target per seed_source            (CLEAR · resolved SCENE_COLOR · a bound Texture)
+  → seed the layer target per seed_source            (CLEAR · a bound Texture; resolved SCENE_COLOR is a named future seed)
   → render held-out instances into the layer target  (own pass · caller order · depth-test vs resolved scene depth · depth-write OFF)
   → CompositorEffect composites layer → scene         (at the layer's declared stage)
   → output
@@ -81,7 +85,7 @@ render full scene EXCLUDING held-out instances       (normal engine render, to c
 This is a **post-resolve, pre-compositor-effect pass**: the held-out instances render as a **self-contained
 deferred pass** hung off the compositor stage-dispatch point (drawn just *before* the effects for that stage run),
 not spliced into the opaque/transparent draw loop. It runs late enough to have the full frame as context (resolved
-scene color + depth, so occlusion and a `SCENE_COLOR` seed both work) yet before the effect that consumes it.
+scene color + depth, so occlusion and a future `SCENE_COLOR` seed both work) yet before the effect that consumes it.
 Default stage is **after the full scene render** (post-resolve); the layer may declare an **earlier** stage when it
 needs MSAA'd layer geometry (see cross-renderer notes). One residual coupling to state plainly: the held-out
 instances must be **gathered during the main fill** (culled, materials bound) so this later pass can draw them — so
@@ -104,7 +108,7 @@ resource's identity and **owns allocation** (keyed by identity → no first-writ
 class_name CompositorRenderLayer extends Resource
 
 @export var format      : Format = Format.INHERIT_SCENE_COLOR  # enumerated (RGBA8/RGB10A2/RGBA16F/R8/R16UI…) — #7916 set
-@export var seed_source : SeedSource = SeedSource.CLEAR        # CLEAR | SCENE_COLOR | a bound Texture — the generalized seed
+@export var seed_source : SeedSource = SeedSource.CLEAR        # CLEAR | a bound Texture (SCENE_COLOR seed is a named future extension)
 @export var stage       : CompositorEffect.EffectCallbackType = EFFECT_CALLBACK_TYPE_POST_TRANSPARENT
 # Structural INVARIANTS, not fields (they define the holdout layer; exposing them as knobs would only shallow it):
 #   • view_count matches the scene (multiview)   • size matches the render target   • post-resolve stage ⇒ single-sample
@@ -118,8 +122,9 @@ class_name CompositorRenderLayer extends Resource
 ```
 
 `seed_source` is the generalization the fork lacked: the layer is not forced to start from "the main scene after
-opaque." It starts from whatever you bind — `CLEAR`, the resolved `SCENE_COLOR`, or an arbitrary `Texture`
-(another effect's output, a SubViewport).
+opaque." It starts from whatever you bind — `CLEAR` or an arbitrary `Texture` (another effect's output, a
+SubViewport). A resolved-`SCENE_COLOR` seed is a **named future extension**, gated behind engine-written coverage
+(below) and deliberately not shipped as a `SeedSource` enum value in v1.
 
 > **`seed_source` and the effect's composite op are coupled — chosen together, not independently.** `SCENE_COLOR`
 > is coherent only when the effect **replaces/samples** the scene with the layer (the fold: the layer *becomes* the
@@ -160,19 +165,30 @@ scene/render boundary is not. An imperative `register_render_layer()` and a `_ge
 also rejected — neither has precedent in this API, which declares needs as properties, not method calls or
 virtuals. See interface-design §5.4.)
 
-### 2. An instance opts in by referencing the same layer resource (this IS the opt-in)
+### 2. Membership is a material `render_mode`; the instance names which layer and in what order
 
 ```gdscript
-# GeometryInstance3D (any material — StandardMaterial3D or ShaderMaterial):
-@export var render_layer       : CompositorRenderLayer   # null = render normally; set = held out into this layer
+// Material — a ShaderMaterial (a StandardMaterial3D adds this one line by becoming a ShaderMaterial):
+shader_type spatial;
+render_mode compositor_layer;   // membership: this material's surfaces are held out (batch-safe permutation)
+```
+```gdscript
+# GeometryInstance3D carrying such a material:
+@export var render_layer       : CompositorRenderLayer   # which held-out layer this instance joins (identity)
 @export var render_layer_order : int = 0                 # caller order key; ties break by stable insertion/fill order
 ```
 
-Setting `render_layer` holds the instance out of the normal lists and into that layer's deferred pass — the **same
-resource object** the effect declares (§1), so the producer↔consumer binding is one editor-checkable symbol, not a
-string and not a global index. The editor config-warns if the referenced layer is not declared by any effect in the
-environment. `render_layer_order` is an exact `int` (no float32-ULP cliff); **ties break by stable insertion/fill
-order**, decoupled from camera depth. The pure comparator is extracted and unit-tested (see Tests).
+Membership is the material's `render_mode compositor_layer` — a batch-safe shader permutation, so held-out surfaces
+stay one indirect-draw batch per material under GPU-driven dispatch (§divergences #1). The instance's `render_layer`
+then names *which* layer that surface is held out into — the **same resource object** the effect declares (§1), so
+the producer↔consumer binding is one editor-checkable symbol, not a string and not a global index. A surface is held
+out only when **both** are present — the material declares the mode *and* the instance references a layer (the
+shipped gate is `surf->shader->compositor_layer && inst->render_layer.is_valid()`): a material with the mode but no
+instance layer renders normally, and an instance layer on a material lacking the mode is a config-warned no-op. The
+editor config-warns if the referenced layer is not declared by any effect in the environment. `render_layer_order`
+is an exact `int` (no float32-ULP cliff) — order must be per-*instance* (two instances of one material need different
+orders, so it cannot live on the material); **ties break by stable insertion/fill order**, decoupled from camera
+depth. The pure comparator is extracted and unit-tested (see Tests).
 
 *(The split binding — assign the `.tres` to instances* and *to the effect — is inherent, not a wart: a producer and
 a consumer must agree on an identity, so something is referenced twice. It is the exact shape of `ViewportTexture`,
@@ -180,14 +196,16 @@ which binds producer=Viewport and consumer=sample-site and is uncontroversial.)*
 
 ### 3. Optional: shader-emitted aux outputs (converges with #7916; not needed for v1)
 
-A material that wants to write more than color into the layer (coverage / weight / ID) opts in with a
-`render_mode` and writes `CUSTOM_BUFFER0..N`, exactly as #7916 proposes. **v1 ships without this** — coverage,
-where a client needs it, is an engine-written side attachment, so no shader-language change is required yet.
+Beyond the membership `render_mode` (§2), a material that wants to write more than color into the layer (coverage /
+weight / ID) opts in with an *additional* aux-output `render_mode` and writes `CUSTOM_BUFFER0..N`, exactly as #7916
+proposes. **v1 ships without this** — coverage, where a client needs it, is an engine-written side attachment, so no
+shader-language change is required yet.
 
 ### Engine implementation sketch (Forward+; Mobile is a *different* pass, not a mirror)
 
 - New `RENDER_LIST_COMPOSITOR_LAYER` sibling of `RENDER_LIST_ALPHA` (`render_forward_clustered.h:79-83`); a
-  fill-branch routes instances with a non-null `render_layer` into it and out of opaque/alpha.
+  fill-branch routes surfaces whose material declares `render_mode compositor_layer` *and* whose instance references
+  a layer into it and out of opaque/alpha.
 - The list sorts by `render_layer_order` (stable insertion on ties) — never `sort_by_reverse_depth_and_priority()`.
 - At each compositor stage dispatch, before the effects for that stage run, the renderer seeds each layer's
   framebuffer per its `seed_source`, then draws that layer's list into it — depth-test vs resolved scene depth,
@@ -241,8 +259,9 @@ unlocks.)
 ## Is there a reason this should be core and not an add-on?
 
 Yes — per the above, no add-on can reach it. It requires a new scene render list + deferred pass in the RD
-renderers, a typed layer above `RenderSceneBuffersRD`'s named-texture store, and a per-instance property on
-`VisualInstance3D` — all core surfaces, none extension-reachable.
+renderers, a typed layer above `RenderSceneBuffersRD`'s named-texture store, a new `compositor_layer` shader
+`render_mode`, and per-instance layer/order properties on `VisualInstance3D` — all core surfaces, none
+extension-reachable.
 
 ### Scope, honesty, and non-goals (so this isn't a god-feature)
 
@@ -264,19 +283,18 @@ renderers, a typed layer above `RenderSceneBuffersRD`'s named-texture store, and
 
 ### Deliberate divergences from #7916 (argued, not accidental)
 
-1. **Opt-in on the instance, not a material directive** — because holdout is a per-instance routing decision, and
-   this is what lets any `StandardMaterial3D` mesh participate without a shader.
-   **Why this does not break #7916's GPU-driven-rendering constraint** (the objection this most invites — #7916
-   chose material-based pass assignment precisely because it "remains entirely compatible with GPU driven rendering,
-   where materials are dispatched instead of geometry"): our `render_layer` is a **per-instance visibility/routing
-   attribute consumed at cull/fill time** — the same stage where a GPU-driven pipeline already does per-instance
-   work (frustum/occlusion culling, list building). It selects *which draw list* an instance lands in; it is **not a
-   shader permutation and does not fragment material dispatch** — a held-out `StandardMaterial3D` still dispatches
-   through the one `StandardMaterial3D` pipeline, merely into a different list. #7916's constraint is about not
-   forcing *per-object shader/pass state* that a material-dispatched GPU pipeline can't resolve; a per-instance list
-   tag carried in the instance buffer is orthogonal to that and, if anything, *more* GPU-driven-native than a
-   `render_mode` (which is a shader-permutation axis). This must be confirmed with the #7916 owners, but the
-   mechanism is compatible-by-construction, not a contradiction.
+1. **Membership stays material-based — adopting #7916's constraint, not diverging from it.** An earlier draft made
+   membership per-instance (any `StandardMaterial3D` participating with no shader). We **retracted it** after reading
+   #7916's FAQ ("pass assignment is material based … fully compatible with GPU driven rendering") and reduz's *GPU
+   Driven Renderer* gist, where the visible set is sorted **by shader type** into one indirect-draw list per material.
+   Per-instance membership would split each material's indirect-draw batch under GPU-driven dispatch — exactly what
+   material-based assignment exists to avoid. So membership is a material `render_mode compositor_layer` — a batch-safe
+   shader-permutation axis, #7916's own mechanism — and the only per-instance surface is *which* layer an object joins
+   and its draw *order*, neither of which fragments material dispatch. This is the single load-bearing concession that
+   keeps the feature compatible with the GPU-driven plan reduz is building toward; the honest cost is that a
+   `StandardMaterial3D` must become a `ShaderMaterial` to declare the mode. (Order still has to be per-instance — two
+   instances of one material need different orders — but it is an *order* axis, not a *membership* axis, so it does not
+   touch dispatch.)
 2. **Identity-resource layers, not indexed buffers** — the layer is addressed by a shared `CompositorRenderLayer`
    object reference (§1), so N independent effects/plugins coexist without colliding on a flat global slot space (a
    limitation #7916 itself carries for its 4 buffers), and the producer↔consumer binding is one editor-checkable
@@ -300,22 +318,25 @@ The rendering-team concerns this most likely trips, stated plainly so they can b
    whether B∧C∧D lands *inside* #7916 or *alongside* it, **before any PR**. The realistic best outcome is "accepted
    in principle, landed in #7916's orbit" — and the proposal is written to make that the default, not a fallback.
 
-1b. **"Per-instance opt-in breaks the GPU-driven-rendering plan."** The specific technical objection the #7916 OP
-   is most likely to raise (he chose material-based pass assignment *for* GPU-driven compatibility). Answered in
-   "Deliberate divergences" #1: `render_layer` is a per-instance cull/fill-time routing tag, not a shader
-   permutation; it changes *which list* an instance draws in, not how its material dispatches, so it is orthogonal
-   to material-dispatched GPU-driven rendering. Flagged here explicitly so it is argued, not discovered.
+1b. **"Per-instance opt-in breaks the GPU-driven-rendering plan."** The objection reduz is most likely to raise — he
+   chose material-based pass assignment *for* GPU-driven compatibility. **Conceded, not argued around:** an earlier
+   draft made membership per-instance; we retracted it after tracing reduz's own GPU-driven gist and made membership a
+   material `render_mode compositor_layer` (Deliberate divergences #1). What remains per-instance is only the layer
+   *identity* reference and the *order* key — neither touches material dispatch (order must be per-instance because
+   two instances of one material need different orders, and `render_priority` is material-level and 8-bit so it can't
+   serve). So on the shipped design this objection no longer applies.
 
 2. **"The compositor must not draw meshes."** `CompositorEffect` (#80214) was built consumer-only and DrawList-from-
    effect access was declined (#13405/#13406, closed). This proposal does **not** make the compositor draw geometry:
    the *engine's* scene renderer draws a held-out list into a target; the compositor only **consumes** it
-   (`get_layer_texture`). The opt-in is a per-instance scene decision, not a compositor capability. The framing is
+   (`get_layer_texture`). The opt-in is a material + instance scene decision, not a compositor capability. The framing is
    "held-out scene render layer," not "render via the compositor" — and that distinction is load-bearing.
 
 3. **"Scene render now depends on compositor state."** With `render_layers` declared on the effect, a reviewer may
-   note the scene renderer's holdout behavior depends on which effects are present. The real driver is the
-   **per-instance** `render_layer` reference (the effect only declares the *sink* + allocates it); an instance
-   pointing at a layer no active effect declares is a config-warned no-op, not corruption. The dependency is a
+   note the scene renderer's holdout behavior depends on which effects are present. The real driver is scene-side —
+   the material's `render_mode compositor_layer` plus the instance's `render_layer` reference (the effect only
+   declares the *sink* + allocates it); an instance pointing at a layer no active effect declares is a config-warned
+   no-op, not corruption. The dependency is a
    registration-time lookup, not a per-frame coupling.
 
 4. **"Hot-path cost."** A new `RENDER_LIST` + fill-branch in both RD renderers is permanent surface. It is

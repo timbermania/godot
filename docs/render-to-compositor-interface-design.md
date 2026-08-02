@@ -113,22 +113,24 @@ never silent. This converts the fork's single hardcoded slot into a meaningful, 
 
 ## 3. Recommended synthesis — best-of, honoring the convergences
 
-**(A) Declaration — an INSTANCE property, not a material `render_mode`.** *(DECIDED — see §5.1.)*
-Opt-in lives on the `VisualInstance3D`/`GeometryInstance3D`, because holding an object out into a layer is a
-per-instance **routing/scheduling** decision, not a material **shading** capability. Consequence and the whole
-reason for the choice: **any material participates unchanged** — `StandardMaterial3D` or `ShaderMaterial`, no
-shader authoring — so a plain mesh can be a compositor layer. The material still shades through its real forward
-pipeline (constraint 1) automatically; the engine just routes the instance's draw into the aux target at the
-declared stage. This diverges from #7916's material-directive (`compositor_opaque_pass N`) and must be argued in
-the proposal: #7916's directive selects a *shading pass* (a material concern); ours is a *holdout/layer* concern
-that is material-agnostic and per-instance — the instance is its correct home, and that is exactly what lets a
-`StandardMaterial3D` mesh participate. A material `render_mode` survives **only** as an *optional* opt-in for
-shaders that want to emit aux outputs (coverage/weight/ID via the `CUSTOM_BUFFER0..N` vocabulary, §3.C / #7916);
-v1 needs none of that (coverage is engine-written). Reject D3's index-in-shader and D1's `uint` selector.
+**(A) Declaration — membership is a material `render_mode`; the instance names the layer + order.**
+*(DECIDED — see §5.1; reversed from an earlier per-instance-membership draft.)*
+Membership lives on the material as `render_mode compositor_layer`, **adopting #7916's rule that pass assignment
+stays material-based** so it "remains entirely compatible with GPU driven rendering, where materials are dispatched
+instead of geometry" (reduz, #7916 FAQ). A per-instance membership flag would split each material's indirect-draw
+batch under GPU-driven dispatch — the exact thing material-based assignment avoids — so it was retracted. The
+material still shades through its real forward pipeline (constraint 1); the `render_mode` is a batch-safe permutation
+that only re-targets *where* the surface's draw lands. The per-instance surface carries only *which* layer (a
+`CompositorRenderLayer` reference) and the draw *order* — routing/scheduling data consumed at cull/fill time, not a
+membership decision. Consequence, stated honestly: a `StandardMaterial3D` must become a `ShaderMaterial` to add the
+one `render_mode` line. A *second, optional* aux-output `render_mode` survives for shaders that emit
+coverage/weight/ID via `CUSTOM_BUFFER0..N` (§3.C / #7916); v1 needs none of that (coverage is engine-written).
+Reject D3's index-in-shader and D1's `uint` selector.
 
 **(B) Typed identity — a `CompositorRenderLayer` resource, owned by the effect, validated at registration.**
 *(Shape finalized in §5.4: slimmed from D2's 7-field target to a ~2-field identity token.)* A typed `Resource`
-carrying enum'd `format`, `seed_source` (`CLEAR` / `SCENE_COLOR` / bound `Texture`), and `stage` (reusing
+carrying enum'd `format`, `seed_source` (`CLEAR` / bound `Texture`; a resolved-`SCENE_COLOR` seed is a named future
+extension, gated behind engine-written coverage — not a shipped enum value), and `stage` (reusing
 `CompositorEffect.EffectCallbackType`, not a rival vocabulary). **Depth-write, depth-source, size, and multiview
 are NOT fields** — structural invariants of a holdout layer (§5.6). The effect declares it as an **exported
 `Array[CompositorRenderLayer]` property** (house style — see §5.4), validated at registration: duplicate identity →
@@ -171,9 +173,14 @@ ordered transparency, WBOIT-later) through a smaller, honester interface. PSX-fo
 
 ## 5. Decisions (post-grilling — most now closed)
 
-1. **Opt-in surface — DECIDED: instance property** (`GeometryInstance3D.render_layer` reference), not a
-   material `render_mode`. Any material participates unchanged. Material `render_mode` reserved for optional
-   aux-output emission only. (Naming of an *optional* aux-output mode remains a later bikeshed.)
+1. **Opt-in surface — DECIDED (reversed): membership is a material `render_mode compositor_layer`**, adopting
+   #7916's material-based pass assignment for GPU-driven-dispatch compatibility. The
+   `GeometryInstance3D.render_layer` reference is *not* the membership switch — it names which layer the surface
+   joins (identity) and pairs with `render_layer_order`; a held-out surface needs **both** the material mode and the
+   instance reference. Cost: a `StandardMaterial3D` must be converted to a `ShaderMaterial`. A *separate, optional*
+   aux-output `render_mode` is reserved for `CUSTOM_BUFFER0..N` emission only. (The earlier "any material
+   participates unchanged / instance-only opt-in" decision was retracted after the #7916 GPU-driven read — see
+   Deliberate divergences #1 in the proposal.)
 2. **Named vs #7916-indexed — DECIDED: named** (per the framing mandate — named targets let N effects coexist;
    the composability win beats the #7916 index-consistency loss; argue it in the proposal).
 3. **Process — DECIDED: file as the explicit "transparent / render-layer counterpart of #7916."** Standalone
@@ -210,9 +217,10 @@ ordered transparency, WBOIT-later) through a smaller, honester interface. PSX-fo
    the interface. They are stated in docs and (where a stage is unrepresentable on a renderer) hard-fail at
    registration — never guard-rail-warned. *(closed)*
 7. **Deferred vs interleaved stage — DECIDED: post-resolve is the default.** The layer is a post-resolve,
-   pre-compositor-effect pass (full-frame pixels as context; occlusion + `SCENE_COLOR` seed both work); an earlier
+   pre-compositor-effect pass (full-frame pixels as context; occlusion + a future `SCENE_COLOR` seed both work); an earlier
    (pre-resolve) stage is opt-in only for clients that need MSAA'd layer geometry (§2.5). *(closed)*
-8. **Seed source — DECIDED: generalized via `seed_source`** (`CLEAR` | `SCENE_COLOR` | a bound `Texture`), not
-   hardcoded to "the main scene after opaque." This fixes the fork's placement bug (which broke mixing transparents
-   between the main scene and the layer) and is the stateless-handoff instinct parameterized. *(closed)*
+8. **Seed source — DECIDED: generalized via `seed_source`** (`CLEAR` | a bound `Texture` in v1; a resolved-`SCENE_COLOR`
+   seed is a named future extension gated behind engine-written coverage, not shipped as an enum value), not hardcoded
+   to "the main scene after opaque." This fixes the fork's placement bug (which broke mixing transparents between the
+   main scene and the layer) and is the stateless-handoff instinct parameterized. *(closed)*
 </content>

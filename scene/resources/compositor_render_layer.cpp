@@ -39,7 +39,7 @@ void CompositorRenderLayer::_bind_methods() {
 
 	ClassDB::bind_method(D_METHOD("set_seed_source", "seed_source"), &CompositorRenderLayer::set_seed_source);
 	ClassDB::bind_method(D_METHOD("get_seed_source"), &CompositorRenderLayer::get_seed_source);
-	ADD_PROPERTY(PropertyInfo(Variant::INT, "seed_source", PROPERTY_HINT_ENUM, "Clear,Scene Color,Texture"), "set_seed_source", "get_seed_source");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "seed_source", PROPERTY_HINT_ENUM, "Clear,Texture"), "set_seed_source", "get_seed_source");
 
 	ClassDB::bind_method(D_METHOD("set_stage", "stage"), &CompositorRenderLayer::set_stage);
 	ClassDB::bind_method(D_METHOD("get_stage"), &CompositorRenderLayer::get_stage);
@@ -60,7 +60,6 @@ void CompositorRenderLayer::_bind_methods() {
 	BIND_ENUM_CONSTANT(FORMAT_MAX);
 
 	BIND_ENUM_CONSTANT(SEED_SOURCE_CLEAR);
-	BIND_ENUM_CONSTANT(SEED_SOURCE_SCENE_COLOR);
 	BIND_ENUM_CONSTANT(SEED_SOURCE_TEXTURE);
 	BIND_ENUM_CONSTANT(SEED_SOURCE_MAX);
 }
