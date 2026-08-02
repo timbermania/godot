@@ -142,8 +142,11 @@ multi-effect composability — argue this explicitly in the proposal (it is D3's
 **Enforcement (as built).** The declaration is load-bearing: `CompositorEffect.render_layers` is resolved to a
 plain `RenderLayerDeclaration` list and pushed to the render backend at registration, and the held-out pass only
 draws a layer some effect on the compositor declares — an instance referencing an *undeclared* layer produces no
-target (currently skipped silently by the renderer; the editor config-warning of §3(B-binding) is a follow-up).
-Duplicate identities are diagnosed and dropped from the pushed set at set-time; an unsupported consume-stage is
+target. That misconfiguration is surfaced two ways: the §3(B-binding) editor config-warning on
+`GeometryInstance3D` (best-effort — it scans the edited scene's WorldEnvironment/Camera3D compositors, so it warns
+only when a compositor is present but does not declare the layer) and, as a runtime backstop for setups the editor
+can't resolve, an `ERR_PRINT_ONCE` from the held-out pass. Duplicate identities are diagnosed and dropped from the
+pushed set at set-time; an unsupported consume-stage is
 refused at the pass and an unrepresentable format at target allocation — both `ERR`-once naming the renderer. On
 the Mobile/GLES renderers any declared layer is refused at registration naming the renderer (Forward+-only by
 construction). Format/seed/stage live on the declaration (the single source of truth); members carry only

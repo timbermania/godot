@@ -64,6 +64,14 @@ void CompositorRenderLayer::_bind_methods() {
 	BIND_ENUM_CONSTANT(SEED_SOURCE_MAX);
 }
 
+void CompositorRenderLayer::_validate_property(PropertyInfo &p_property) const {
+	// The seed texture is only consulted when seeding from a texture; hide the slot otherwise so the
+	// inspector doesn't offer an input that does nothing. set_seed_source() notifies so this re-runs live.
+	if (p_property.name == "seed_texture" && seed_source != SEED_SOURCE_TEXTURE) {
+		p_property.usage = PROPERTY_USAGE_NO_EDITOR;
+	}
+}
+
 void CompositorRenderLayer::set_format(Format p_format) {
 	ERR_FAIL_INDEX(p_format, FORMAT_MAX);
 	if (format == p_format) {
@@ -83,6 +91,7 @@ void CompositorRenderLayer::set_seed_source(SeedSource p_seed_source) {
 		return;
 	}
 	seed_source = p_seed_source;
+	notify_property_list_changed();
 	emit_changed();
 }
 

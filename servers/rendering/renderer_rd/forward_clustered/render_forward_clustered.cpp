@@ -2574,9 +2574,13 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 			const uint32_t run_size = run_end - run_start;
 
 			// The declaration is the authoritative registration for this layer identity. No declaration ⇒
-			// no consumer ⇒ no engine-owned target: skip the run (see the declaration map built above).
+			// no consumer ⇒ no engine-owned target: the members are held out of the scene yet drawn nowhere,
+			// which is always a wiring mistake. Surface it once rather than letting geometry silently vanish
+			// (the GeometryInstance3D editor config-warning catches this at edit time; this is the runtime
+			// backstop for setups it can't resolve, e.g. a compositor supplied at runtime).
 			const RenderLayerDeclaration *declaration = declared_layers.getptr(run_layer);
 			if (declaration == nullptr) {
+				ERR_PRINT_ONCE("RenderForwardClustered: a compositor render-layer member references a layer that no CompositorEffect declares; it will not be rendered. Add the CompositorRenderLayer to a CompositorEffect's render_layers.");
 				run_start = run_end;
 				continue;
 			}

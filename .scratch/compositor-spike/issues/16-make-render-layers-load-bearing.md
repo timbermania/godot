@@ -91,9 +91,14 @@ steps are staged as edits, not yet `git commit`ed.
   `doc/classes/CompositorEffect.xml` `render_layers` / `get_layer_texture` rewritten (were documented as an
   inert hint — now authoritative).
 
-**Deferred follow-up (one item):** the §3(B-binding) *editor config-warning* on `GeometryInstance3D` when its
-`render_layer` is set but declared by no effect in the environment. Correctness is already handled (the renderer
-produces no orphan target); this is editor ergonomics and needs the instance to resolve the active
-environment→compositor→effects at edit time. Noted in the §3B "Enforcement (as built)" doc note. **Verification
-gap:** the windowed FFT proof was NOT re-run this session — recommended before opening the PR (per
+**Editor ergonomics (follow-up commit, 2026-08-02 — done):** the §3(B-binding) config-warning is now
+implemented on `GeometryInstance3D::get_configuration_warnings()` — a best-effort scan of the edited scene's
+WorldEnvironment/Camera3D compositors that warns only when a compositor is present but does not declare the
+referenced layer (never on an unresolvable setup). Paired with a runtime `ERR_PRINT_ONCE` backstop from the
+held-out pass for setups the editor can't resolve (runtime-set / cross-scene compositors). Also: `seed_texture`
+is hidden in the inspector when `seed_source != TEXTURE` (`CompositorRenderLayer::_validate_property`), and
+`set_render_layer` refreshes the config-warning. Left as-is on inspection: `render_layer_order` (its class-ref
+tooltip already documents the unbounded painter-order key; a numeric range would be wrong).
+
+**Verification gap:** the windowed FFT proof was NOT re-run this session — recommended before opening the PR (per
 `compositor-fold-game-run-invocation`).
