@@ -57,7 +57,7 @@ public:
 		virtual void set_pivot_data(float p_sorting_offset, bool p_use_aabb_center) override {}
 		virtual void set_lod_bias(float p_lod_bias) override {}
 		virtual void set_layer_mask(uint32_t p_layer_mask) override {}
-		virtual void set_render_layer(ObjectID p_layer_id, int32_t p_render_layer_order, int32_t p_format, int32_t p_seed_source, RID p_seed_texture) override {}
+		virtual void set_render_layer(const RenderLayerMembership &p_membership) override {}
 		virtual void set_fade_range(bool p_enable_near, float p_near_begin, float p_near_end, bool p_enable_far, float p_far_begin, float p_far_end) override {}
 		virtual void set_parent_fade_alpha(float p_alpha) override {}
 		virtual void set_transparency(float p_transparency) override {}

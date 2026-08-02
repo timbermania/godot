@@ -38,7 +38,6 @@
 #include "servers/rendering/renderer_rd/storage_rd/particles_storage.h"
 #include "servers/rendering/renderer_rd/storage_rd/texture_storage.h"
 #include "servers/rendering/renderer_rd/uniform_set_cache_rd.h"
-#include "scene/resources/compositor_render_layer.h"
 #include "servers/rendering/rendering_device.h"
 #include "servers/rendering/rendering_server_default.h"
 #include "servers/rendering/storage/ltc_lut.gen.h"
@@ -52,19 +51,19 @@ using namespace RendererSceneRenderImplementation;
 // Maps a CompositorRenderLayer's declared color format to a concrete RD data format for the
 // engine-owned target. INHERIT_SCENE_COLOR resolves to the scene's base color format (the
 // held-out members shade through their real material, so matching scene color is the sane default).
-static RD::DataFormat _compositor_layer_rd_format(int p_format, RD::DataFormat p_scene_color_format) {
+static RD::DataFormat _compositor_layer_rd_format(RenderLayerMembership::Format p_format, RD::DataFormat p_scene_color_format) {
 	switch (p_format) {
-		case CompositorRenderLayer::FORMAT_RGBA8:
+		case RenderLayerMembership::FORMAT_RGBA8:
 			return RD::DATA_FORMAT_R8G8B8A8_UNORM;
-		case CompositorRenderLayer::FORMAT_RGB10_A2:
+		case RenderLayerMembership::FORMAT_RGB10_A2:
 			return RD::DATA_FORMAT_A2B10G10R10_UNORM_PACK32;
-		case CompositorRenderLayer::FORMAT_RGBA16F:
+		case RenderLayerMembership::FORMAT_RGBA16F:
 			return RD::DATA_FORMAT_R16G16B16A16_SFLOAT;
-		case CompositorRenderLayer::FORMAT_R8:
+		case RenderLayerMembership::FORMAT_R8:
 			return RD::DATA_FORMAT_R8_UNORM;
-		case CompositorRenderLayer::FORMAT_R16UI:
+		case RenderLayerMembership::FORMAT_R16UI:
 			return RD::DATA_FORMAT_R16_UINT;
-		case CompositorRenderLayer::FORMAT_INHERIT_SCENE_COLOR:
+		case RenderLayerMembership::FORMAT_INHERIT_SCENE_COLOR:
 		default:
 			return p_scene_color_format;
 	}
@@ -903,7 +902,7 @@ void RenderForwardClustered::_fill_instance_data(RenderListType p_render_list, i
 		// boundary: the held-out pass draws each layer as its own contiguous element range, so an
 		// instanced group that straddled two layers would draw into the wrong target. It is a no-op
 		// for every other list, where `render_layer` is null on all instances.
-		if (prev_surface != nullptr && !cant_repeat && prev_surface->sort.sort_key1 == surface->sort.sort_key1 && prev_surface->sort.sort_key2 == surface->sort.sort_key2 && inst->mirror == prev_surface->owner->mirror && inst->render_layer == prev_surface->owner->render_layer && repeats < RenderElementInfo::MAX_REPEATS) {
+		if (prev_surface != nullptr && !cant_repeat && prev_surface->sort.sort_key1 == surface->sort.sort_key1 && prev_surface->sort.sort_key2 == surface->sort.sort_key2 && inst->mirror == prev_surface->owner->mirror && inst->render_layer.layer_id == prev_surface->owner->render_layer.layer_id && repeats < RenderElementInfo::MAX_REPEATS) {
 			//this element is the same as the previous one, count repeats to draw it using instancing
 			repeats++;
 		} else {
@@ -1175,7 +1174,7 @@ void RenderForwardClustered::_fill_render_list(RenderListType p_render_list, con
 				// material; the engine only retargets where the output lands. Membership =
 				// `render_mode compositor_layer` (a batch-safe shader permutation) AND a valid
 				// per-instance render_layer identity.
-				if (surf->shader != nullptr && surf->shader->compositor_layer && inst->render_layer.is_valid()) {
+				if (surf->shader != nullptr && surf->shader->compositor_layer && inst->render_layer.is_member()) {
 					surf->color_pass_inclusion_mask = 0;
 					render_list[RENDER_LIST_COMPOSITOR_LAYER].add_element(surf);
 				} else {
@@ -2542,9 +2541,9 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 		uint32_t run_start = 0;
 		while (run_start < layer_element_count) {
 			const GeometryInstanceForwardClustered *run_owner = layer_list.elements[run_start]->owner;
-			const ObjectID run_layer = run_owner->render_layer;
+			const ObjectID run_layer = run_owner->render_layer.layer_id;
 			uint32_t run_end = run_start + 1;
-			while (run_end < layer_element_count && layer_list.elements[run_end]->owner->render_layer == run_layer) {
+			while (run_end < layer_element_count && layer_list.elements[run_end]->owner->render_layer.layer_id == run_layer) {
 				run_end++;
 			}
 			const uint32_t run_size = run_end - run_start;
@@ -2552,7 +2551,7 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 			// Format + seed are read from the render instance (pushed down from the CompositorRenderLayer
 			// resource on the main thread by GeometryInstance3D::_update_render_layer). The render thread
 			// never dereferences the (main-thread-owned) resource — run_layer is only an identity key.
-			const RD::DataFormat layer_format = _compositor_layer_rd_format(run_owner->render_layer_format, scene_color_format);
+			const RD::DataFormat layer_format = _compositor_layer_rd_format(run_owner->render_layer.format, scene_color_format);
 			const RID layer_texture = rb->get_compositor_layer_texture(run_layer, layer_format);
 			if (layer_texture.is_null()) {
 				// Allocation of the engine-owned target failed (e.g. an unsupported format on this device).
@@ -2573,8 +2572,8 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 			// (A SCENE_COLOR seed is a named future extension — gated behind an engine-written coverage channel —
 			// and is deliberately not part of the shipped SeedSource enum yet; see the proposal.)
 			bool seeded_from_texture = false;
-			if (run_owner->render_layer_seed_source == CompositorRenderLayer::SEED_SOURCE_TEXTURE) {
-				const RID seed_rd = run_owner->render_layer_seed_texture.is_valid() ? texture_storage->texture_get_rd_texture(run_owner->render_layer_seed_texture) : RID();
+			if (run_owner->render_layer.seed_source == RenderLayerMembership::SEED_SOURCE_TEXTURE) {
+				const RID seed_rd = run_owner->render_layer.seed_texture.is_valid() ? texture_storage->texture_get_rd_texture(run_owner->render_layer.seed_texture) : RID();
 				if (seed_rd.is_null()) {
 					WARN_PRINT_ONCE("compositor_layer: SEED_SOURCE_TEXTURE layer has no valid seed_texture; seeding with CLEAR.");
 				} else {

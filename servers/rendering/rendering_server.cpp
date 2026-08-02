@@ -2092,9 +2092,14 @@ String RenderingServer::get_current_rendering_method() const {
 	return ::OS::get_singleton()->get_current_rendering_method();
 }
 
+// Single source of truth for the "compositor render-layer is Forward+ only" invariant: the one rendering
+// method whose scene renderer implements the held-out pass. The Mobile scene shader enforces the same
+// invariant from the other side (scene_shader_forward_mobile.cpp hard-fails on the compositor_layer flag);
+// if a second renderer ever gains support, update both this predicate and that hard-fail together.
+const char *RenderingServer::COMPOSITOR_LAYER_RENDERING_METHOD = "forward_plus";
+
 bool RenderingServer::is_compositor_layer_supported() const {
-	// The held-out compositor render-layer pass is implemented only by the Forward+ renderer.
-	return get_current_rendering_method() == "forward_plus";
+	return get_current_rendering_method() == COMPOSITOR_LAYER_RENDERING_METHOD;
 }
 
 Vector<uint8_t> _convert_surface_version_1_to_surface_version_2(uint64_t p_format, Vector<uint8_t> p_vertex_data, uint32_t p_vertex_count, uint32_t p_old_stride, uint32_t p_vertex_size, uint32_t p_normal_size, uint32_t p_position_stride, uint32_t p_normal_tangent_stride) {

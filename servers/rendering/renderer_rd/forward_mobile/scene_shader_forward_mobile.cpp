@@ -194,7 +194,9 @@ void SceneShaderForwardMobile::ShaderData::set_code(const String &p_code) {
 		// The compositor render-layer pass only exists in the Forward+ (clustered) renderer. On Mobile there
 		// is no such list, so the flag cannot be honored. This is a genuinely unsupported config (not a
 		// recoverable warning): hard-fail naming the renderer rather than silently rendering the member
-		// through the normal pass with wrong blending.
+		// through the normal pass with wrong blending. This is the Mobile-side half of the "Forward+ only"
+		// invariant whose single source of truth is RenderingServer::COMPOSITOR_LAYER_RENDERING_METHOD /
+		// is_compositor_layer_supported(); keep the two in sync if a second renderer ever gains support.
 		ERR_PRINT_ONCE("compositor_layer render_mode is not supported on the Mobile renderer (Forward+ only). The flagged material cannot be composited; use the Forward+ rendering method.");
 	}
 

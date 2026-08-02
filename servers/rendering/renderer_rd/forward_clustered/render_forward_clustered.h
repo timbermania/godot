@@ -746,12 +746,12 @@ private:
 			_FORCE_INLINE_ bool operator()(uint32_t a, uint32_t b) const {
 				const GeometryInstanceForwardClustered *ia = elements[a]->owner;
 				const GeometryInstanceForwardClustered *ib = elements[b]->owner;
-				const uint64_t la = ia->render_layer;
-				const uint64_t lb = ib->render_layer;
+				const uint64_t la = ia->render_layer.layer_id;
+				const uint64_t lb = ib->render_layer.layer_id;
 				if (la != lb) {
 					return la < lb;
 				}
-				return compositor_layer_order_less(ia->render_layer_order, a, ib->render_layer_order, b);
+				return compositor_layer_order_less(ia->render_layer.order, a, ib->render_layer.order, b);
 			}
 		};
 

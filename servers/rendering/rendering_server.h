@@ -35,6 +35,7 @@
 #include "core/variant/typed_array.h"
 #include "core/variant/variant.h"
 #include "servers/display/display_server_enums.h"
+#include "servers/rendering/render_layer_membership.h"
 #include "servers/rendering/rendering_device_enums.h"
 #include "servers/rendering/rendering_server_enums.h"
 #include "servers/rendering/rendering_server_types.h"
@@ -771,7 +772,7 @@ public:
 	// Compositor render-layer membership. `p_format`/`p_seed_source` are the member's CompositorRenderLayer
 	// config resolved to plain enum values on the main thread, so the render thread never dereferences the
 	// (main-thread-owned) resource. See RenderForwardClustered's held-out pass.
-	virtual void instance_geometry_set_render_layer(RID p_instance, ObjectID p_layer_id, int32_t p_render_layer_order, int32_t p_format, int32_t p_seed_source, RID p_seed_texture) = 0;
+	virtual void instance_geometry_set_render_layer(RID p_instance, const RenderLayerMembership &p_membership) = 0;
 
 	virtual void instance_geometry_set_shader_parameter(RID p_instance, const StringName &, const Variant &p_value) = 0;
 	virtual Variant instance_geometry_get_shader_parameter(RID p_instance, const StringName &) const = 0;
@@ -1053,6 +1054,10 @@ public:
 	// Capability gate for the compositor render-layer feature (held-out CompositorRenderLayer
 	// targets). Only the Forward+ method implements the held-out pass; consumers should
 	// feature-detect with has_method() first so scripts still load on stock builds.
+	// COMPOSITOR_LAYER_RENDERING_METHOD is the single source of truth for that "Forward+ only"
+	// invariant (see is_compositor_layer_supported() and the Mobile hard-fail in
+	// scene_shader_forward_mobile.cpp).
+	static const char *COMPOSITOR_LAYER_RENDERING_METHOD;
 	bool is_compositor_layer_supported() const;
 
 #ifdef TOOLS_ENABLED

@@ -405,24 +405,36 @@ float GeometryInstance3D::get_lod_bias() const {
 // format/seed_source to plain enum values HERE (main thread). The render thread then reads those values
 // off the render instance and never dereferences the resource. Re-invoked when the resource emits
 // `changed`, so editing its format/seed in the inspector takes effect live.
+// RenderLayerMembership (render-server side) mirrors CompositorRenderLayer's Format/SeedSource enums to
+// avoid a scene->server header dependency. This TU sees both, so it is the single place that guarantees
+// the mirror never drifts: if either enum changes, one of these fails to compile.
+static_assert((int)RenderLayerMembership::FORMAT_INHERIT_SCENE_COLOR == (int)CompositorRenderLayer::FORMAT_INHERIT_SCENE_COLOR);
+static_assert((int)RenderLayerMembership::FORMAT_RGBA8 == (int)CompositorRenderLayer::FORMAT_RGBA8);
+static_assert((int)RenderLayerMembership::FORMAT_RGB10_A2 == (int)CompositorRenderLayer::FORMAT_RGB10_A2);
+static_assert((int)RenderLayerMembership::FORMAT_RGBA16F == (int)CompositorRenderLayer::FORMAT_RGBA16F);
+static_assert((int)RenderLayerMembership::FORMAT_R8 == (int)CompositorRenderLayer::FORMAT_R8);
+static_assert((int)RenderLayerMembership::FORMAT_R16UI == (int)CompositorRenderLayer::FORMAT_R16UI);
+static_assert((int)RenderLayerMembership::FORMAT_MAX == (int)CompositorRenderLayer::FORMAT_MAX);
+static_assert((int)RenderLayerMembership::SEED_SOURCE_CLEAR == (int)CompositorRenderLayer::SEED_SOURCE_CLEAR);
+static_assert((int)RenderLayerMembership::SEED_SOURCE_TEXTURE == (int)CompositorRenderLayer::SEED_SOURCE_TEXTURE);
+static_assert((int)RenderLayerMembership::SEED_SOURCE_MAX == (int)CompositorRenderLayer::SEED_SOURCE_MAX);
+
 void GeometryInstance3D::_update_render_layer() {
-	ObjectID layer_id;
-	int format = 0;
-	int seed_source = 0;
-	RID seed_texture;
+	RenderLayerMembership membership;
 	if (render_layer.is_valid()) {
-		layer_id = render_layer->get_instance_id();
-		format = render_layer->get_format();
-		seed_source = render_layer->get_seed_source();
+		membership.layer_id = render_layer->get_instance_id();
+		membership.order = render_layer_order;
+		membership.format = (RenderLayerMembership::Format)render_layer->get_format();
+		membership.seed_source = (RenderLayerMembership::SeedSource)render_layer->get_seed_source();
 		// Resolve the seed texture to its RenderingServer RID here (main thread). The render thread reads
 		// the current RD texture from this RID at pass time, so a live per-frame-updated texture works
 		// without re-pushing, as long as the same texture object stays bound.
 		const Ref<Texture2D> seed_tex = render_layer->get_seed_texture();
 		if (seed_tex.is_valid()) {
-			seed_texture = seed_tex->get_rid();
+			membership.seed_texture = seed_tex->get_rid();
 		}
 	}
-	RS::get_singleton()->instance_geometry_set_render_layer(get_instance(), layer_id, render_layer_order, format, seed_source, seed_texture);
+	RS::get_singleton()->instance_geometry_set_render_layer(get_instance(), membership);
 }
 
 void GeometryInstance3D::set_render_layer(const Ref<CompositorRenderLayer> &p_render_layer) {
