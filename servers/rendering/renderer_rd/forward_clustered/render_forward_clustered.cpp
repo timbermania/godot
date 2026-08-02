@@ -1757,6 +1757,12 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 	bool is_reflection_probe = p_render_data->reflection_probe.is_valid();
 	bool is_multiview = rb->get_view_count() > 1;
 
+	// Reset the per-frame "which compositor render-layers drew this frame" signal before anything can
+	// populate it. Held-out layer targets persist across frames (named_textures), so a consumer at
+	// POST_TRANSPARENT must be told which layers actually had members this frame; a frame with zero
+	// held-out members skips the pass entirely (below), so this reset must be unconditional here.
+	rb->reset_compositor_layers_rendered();
+
 	static const int texture_multisamples[RSE::VIEWPORT_MSAA_MAX] = { 1, 2, 4, 8 };
 
 	//first of all, make a new render pass
@@ -2600,6 +2606,11 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 				clear_colors.push_back(Color(0, 0, 0, 0));
 				_render_list_with_draw_list(&render_list_params, layer_framebuffer, RD::DRAW_CLEAR_COLOR_ALL, clear_colors, 0.0f, 0u, p_render_data->render_region);
 			}
+
+			// Record that this layer actually drew this frame, so a POST_TRANSPARENT consumer reading
+			// get_compositor_layer_texture() gets this fresh target rather than an empty RID. Reached only
+			// when the target allocated (the null case above `continue`s), so the target here is valid.
+			rb->mark_compositor_layer_rendered(run_layer);
 
 			run_start = run_end;
 		}

@@ -545,11 +545,32 @@ RID RenderSceneBuffersRD::get_compositor_layer_texture(uint64_t p_layer_id) cons
 	if (p_layer_id == 0) {
 		return RID();
 	}
+	// The target texture is a named_texture that PERSISTS across frames (only freed on configure /
+	// clear_context / resize), so has_texture() staying true is not evidence the layer drew THIS frame.
+	// Gate on the per-frame render-thread signal instead: if no member drew into this layer this frame,
+	// hand back an empty RID so the consumer composites nothing rather than last frame's stale target.
+	if (!compositor_layers_rendered_this_frame.has(p_layer_id)) {
+		return RID();
+	}
 	const StringName layer_name = itos(p_layer_id);
 	if (!has_texture(RB_SCOPE_COMPOSITOR_LAYER, layer_name)) {
 		return RID();
 	}
 	return get_texture(RB_SCOPE_COMPOSITOR_LAYER, layer_name);
+}
+
+void RenderSceneBuffersRD::reset_compositor_layers_rendered() {
+	// Called once at the top of each scene render, before the held-out pass repopulates the set and
+	// before the POST_TRANSPARENT consumer callbacks read it. Must run unconditionally (even on a frame
+	// with zero held-out members, whose pass is skipped) — that empty-frame case is the whole point.
+	compositor_layers_rendered_this_frame.clear();
+}
+
+void RenderSceneBuffersRD::mark_compositor_layer_rendered(uint64_t p_layer_id) {
+	if (p_layer_id == 0) {
+		return;
+	}
+	compositor_layers_rendered_this_frame.insert(p_layer_id);
 }
 
 // Allocate shared buffers
