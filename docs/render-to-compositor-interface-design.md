@@ -139,6 +139,16 @@ derives the existing `NTKey` from the resource's *identity*, so **no user ever s
 global slot index. Adopt #7916's *enumerated-format* set; **diverge from its index to a resource identity** for
 multi-effect composability — argue this explicitly in the proposal (it is D3's own conceded weak point).
 
+**Enforcement (as built).** The declaration is load-bearing: `CompositorEffect.render_layers` is resolved to a
+plain `RenderLayerDeclaration` list and pushed to the render backend at registration, and the held-out pass only
+draws a layer some effect on the compositor declares — an instance referencing an *undeclared* layer produces no
+target (currently skipped silently by the renderer; the editor config-warning of §3(B-binding) is a follow-up).
+Duplicate identities are diagnosed and dropped from the pushed set at set-time; an unsupported consume-stage is
+refused at the pass and an unrepresentable format at target allocation — both `ERR`-once naming the renderer. On
+the Mobile/GLES renderers any declared layer is refused at registration naming the renderer (Forward+-only by
+construction). Format/seed/stage live on the declaration (the single source of truth); members carry only
+identity + order (§3.C).
+
 **(B-binding) The instance binds the layer by referencing the same resource — this IS the opt-in.**
 `GeometryInstance3D.render_layer: CompositorRenderLayer` — a single editor-validatable reference to the *same
 object* the effect declares: setting it *is* how an object opts in (no separate capability flag to keep in sync).

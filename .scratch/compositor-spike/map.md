@@ -305,6 +305,13 @@ NOT `--headless`; `scons platform=linuxbsd target=editor dev_build=yes -j24`).
   `is_compositor_layer_supported`) + class-ref docs, **plus the `TEXTURE` seed source (ticket 13).**
   **ALL ENGINE WORK IS DONE — no engine tickets remain open.** Historical note: Step 11 landed the
   render-thread hardening, so 12 was the last of the *seven*, and 13 (the seed) closed the primitive.
+- **Upstream-PR hardening — make `render_layers` load-bearing** — ticket **16** (2026-08-02, directed by the user
+  as upstream-PR prep, reopening engine work beyond the original proof-in-hand scope). The shipped `render_layers`
+  was an inert declarative hint (ticket 12); the proposal (`interface-design §3B`) sold it as validated-at-
+  registration. **RESOLVED** — the effect-side declaration is now authoritative (pushed to the RS, gates target
+  creation, format/seed/stage as single source of truth, ERR-naming-the-renderer refusals). Six commits, all built
+  green + unit-tested; **uncommitted**. One deferred follow-up (editor config-warning) + one verification gap
+  (windowed FFT proof not re-run) — see the ticket.
 - **`TEXTURE` seed source** — GRADUATED (2026-08-01, ticket 03) into engine ticket **13**, promoted to
   **critical path** (the FFT proof's sub/mix modes require the display-space seed), **now RESOLVED**
   (2026-08-01): the engine copies a bound (live-updatable) `Texture2DRD` into the target and LOADs it under
