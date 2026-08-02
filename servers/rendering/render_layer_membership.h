@@ -32,17 +32,18 @@
 
 #include "core/object/object_id.h"
 #include "core/templates/rid.h"
+#include "servers/rendering/rendering_server_enums.h"
 
-// A GeometryInstance3D's compositor render-layer membership, pushed down from its
-// `CompositorRenderLayer` resource to the render backend on the main thread (so the render thread
-// never dereferences the resource). This collapses what used to travel as a five-parameter tuple and
-// five loose per-instance fields into one value passed and stored by name.
+// A GeometryInstance3D's compositor render-layer membership, pushed down to the render backend on the main
+// thread. A member carries only its layer *identity* and caller-order key: the layer's format, seed source,
+// and seed texture are owned by the effect-side `RenderLayerDeclaration` (the single source of truth), not
+// copied onto every member. `is_member()` gates whether the instance is held out at all.
 //
-// `format`/`seed_source` MIRROR `CompositorRenderLayer::Format`/`SeedSource`. The enums are duplicated
-// here rather than included from `scene/` on purpose: the render server must not take a header
-// dependency on the scene layer (that is the wrong direction, and would invert Godot's scene->servers
-// layering). `scene/3d/visual_instance_3d.cpp` — which sees both — `static_assert`s that the two
-// enumerations stay in lockstep, so this mirror can never silently drift.
+// The `Format`/`SeedSource` enums live here (used by `RenderLayerDeclaration` below) and MIRROR
+// `CompositorRenderLayer::Format`/`SeedSource`. They are duplicated rather than included from `scene/` on
+// purpose: the render server must not take a header dependency on the scene layer (that would invert Godot's
+// scene->servers layering). `scene/resources/compositor.cpp` — which sees both — `static_assert`s that the
+// two enumerations stay in lockstep, so this mirror can never silently drift.
 struct RenderLayerMembership {
 	// Mirror of CompositorRenderLayer::Format (kept value-for-value in sync; see static_asserts).
 	enum Format {
@@ -66,11 +67,27 @@ struct RenderLayerMembership {
 	ObjectID layer_id;
 	// Exact caller-order key the RENDER_LIST_COMPOSITOR_LAYER list sorts by (ties: submission order).
 	int32_t order = 0;
-	Format format = FORMAT_INHERIT_SCENE_COLOR;
-	SeedSource seed_source = SEED_SOURCE_CLEAR;
+
+	bool is_member() const { return layer_id.is_valid(); }
+};
+
+// The effect-side declaration of one compositor render layer, resolved from its `CompositorRenderLayer`
+// resource on the main thread and pushed to the render backend at registration (see
+// `CompositorEffect::set_render_layers`). This is the authoritative record the renderer validates and keys
+// the layer's target from: an instance whose `RenderLayerMembership::layer_id` matches a declared `identity`
+// is held out into that layer; an instance referencing an undeclared identity draws no orphan target. It
+// reuses `RenderLayerMembership`'s mirrored `Format`/`SeedSource` enums so the format/seed live on the
+// declaration (the single source of truth) rather than being copied onto every member.
+struct RenderLayerDeclaration {
+	// Identity of the declared `CompositorRenderLayer` resource — the key members reference and the target
+	// is keyed by. Invalid identities are never pushed (validated at registration).
+	ObjectID identity;
+	RenderLayerMembership::Format format = RenderLayerMembership::FORMAT_INHERIT_SCENE_COLOR;
+	RenderLayerMembership::SeedSource seed_source = RenderLayerMembership::SEED_SOURCE_CLEAR;
 	// Seed texture's RenderingServer RID (resolved on the main thread); only meaningful when
 	// `seed_source == SEED_SOURCE_TEXTURE`. The pass resolves it to the current RD texture at draw time.
 	RID seed_texture;
-
-	bool is_member() const { return layer_id.is_valid(); }
+	// Pipeline stage the layer is consumed at (mirrors `CompositorEffect::EffectCallbackType`). v1 supports
+	// POST_TRANSPARENT only; other stages are refused at registration, naming the renderer.
+	RSE::CompositorEffectCallbackType stage = RSE::COMPOSITOR_EFFECT_CALLBACK_TYPE_POST_TRANSPARENT;
 };

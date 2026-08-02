@@ -149,6 +149,7 @@ public:
 
 	virtual void compositor_effect_set_callback(RID p_compositor, RSE::CompositorEffectCallbackType p_callback_type, const Callable &p_callback) = 0;
 	virtual void compositor_effect_set_flag(RID p_compositor, RSE::CompositorEffectFlags p_flag, bool p_set) = 0;
+	virtual void compositor_effect_set_render_layers(RID p_compositor, const Vector<RenderLayerDeclaration> &p_render_layers) = 0;
 
 	/* COMPOSITOR API */
 

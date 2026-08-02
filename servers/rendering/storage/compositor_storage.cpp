@@ -146,6 +146,20 @@ bool RendererCompositorStorage::compositor_effect_get_flag(RID p_effect, RSE::Co
 	return effect->flags.has_flag(p_flag);
 }
 
+void RendererCompositorStorage::compositor_effect_set_render_layers(RID p_effect, const Vector<RenderLayerDeclaration> &p_render_layers) {
+	CompositorEffect *effect = compositor_effects_owner.get_or_null(p_effect);
+	ERR_FAIL_NULL(effect);
+
+	effect->render_layers = p_render_layers;
+}
+
+Vector<RenderLayerDeclaration> RendererCompositorStorage::compositor_effect_get_render_layers(RID p_effect) const {
+	CompositorEffect *effect = compositor_effects_owner.get_or_null(p_effect);
+	ERR_FAIL_NULL_V(effect, Vector<RenderLayerDeclaration>());
+
+	return effect->render_layers;
+}
+
 // Compositor
 
 RID RendererCompositorStorage::compositor_allocate() {

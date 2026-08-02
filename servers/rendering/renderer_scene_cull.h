@@ -1203,6 +1203,7 @@ public:
 	PASS2(compositor_effect_set_enabled, RID, bool)
 	PASS3(compositor_effect_set_callback, RID, RSE::CompositorEffectCallbackType, const Callable &)
 	PASS3(compositor_effect_set_flag, RID, RSE::CompositorEffectFlags, bool)
+	PASS2(compositor_effect_set_render_layers, RID, const Vector<RenderLayerDeclaration> &)
 
 	// Compositor
 

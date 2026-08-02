@@ -401,38 +401,16 @@ float GeometryInstance3D::get_lod_bias() const {
 	return lod_bias;
 }
 
-// Push the current membership down to the RenderingServer, resolving the CompositorRenderLayer's
-// format/seed_source to plain enum values HERE (main thread). The render thread then reads those values
-// off the render instance and never dereferences the resource. Re-invoked when the resource emits
-// `changed`, so editing its format/seed in the inspector takes effect live.
-// RenderLayerMembership (render-server side) mirrors CompositorRenderLayer's Format/SeedSource enums to
-// avoid a scene->server header dependency. This TU sees both, so it is the single place that guarantees
-// the mirror never drifts: if either enum changes, one of these fails to compile.
-static_assert((int)RenderLayerMembership::FORMAT_INHERIT_SCENE_COLOR == (int)CompositorRenderLayer::FORMAT_INHERIT_SCENE_COLOR);
-static_assert((int)RenderLayerMembership::FORMAT_RGBA8 == (int)CompositorRenderLayer::FORMAT_RGBA8);
-static_assert((int)RenderLayerMembership::FORMAT_RGB10_A2 == (int)CompositorRenderLayer::FORMAT_RGB10_A2);
-static_assert((int)RenderLayerMembership::FORMAT_RGBA16F == (int)CompositorRenderLayer::FORMAT_RGBA16F);
-static_assert((int)RenderLayerMembership::FORMAT_R8 == (int)CompositorRenderLayer::FORMAT_R8);
-static_assert((int)RenderLayerMembership::FORMAT_R16UI == (int)CompositorRenderLayer::FORMAT_R16UI);
-static_assert((int)RenderLayerMembership::FORMAT_MAX == (int)CompositorRenderLayer::FORMAT_MAX);
-static_assert((int)RenderLayerMembership::SEED_SOURCE_CLEAR == (int)CompositorRenderLayer::SEED_SOURCE_CLEAR);
-static_assert((int)RenderLayerMembership::SEED_SOURCE_TEXTURE == (int)CompositorRenderLayer::SEED_SOURCE_TEXTURE);
-static_assert((int)RenderLayerMembership::SEED_SOURCE_MAX == (int)CompositorRenderLayer::SEED_SOURCE_MAX);
-
+// Push the current membership down to the RenderingServer. A member carries only its layer identity and
+// caller-order key; the layer's format/seed_source/seed_texture live on the effect-side declaration (the
+// single source of truth — see CompositorEffect), so this never resolves them and the render thread never
+// dereferences the resource. `render_layer_order` is the instance's own property, so this re-pushes when it
+// changes; the layer's *contents* changing is the effect's concern, not the instance's.
 void GeometryInstance3D::_update_render_layer() {
 	RenderLayerMembership membership;
 	if (render_layer.is_valid()) {
 		membership.layer_id = render_layer->get_instance_id();
 		membership.order = render_layer_order;
-		membership.format = (RenderLayerMembership::Format)render_layer->get_format();
-		membership.seed_source = (RenderLayerMembership::SeedSource)render_layer->get_seed_source();
-		// Resolve the seed texture to its RenderingServer RID here (main thread). The render thread reads
-		// the current RD texture from this RID at pass time, so a live per-frame-updated texture works
-		// without re-pushing, as long as the same texture object stays bound.
-		const Ref<Texture2D> seed_tex = render_layer->get_seed_texture();
-		if (seed_tex.is_valid()) {
-			membership.seed_texture = seed_tex->get_rid();
-		}
 	}
 	RS::get_singleton()->instance_geometry_set_render_layer(get_instance(), membership);
 }
@@ -442,13 +420,7 @@ void GeometryInstance3D::set_render_layer(const Ref<CompositorRenderLayer> &p_re
 		return;
 	}
 	bool was_valid = render_layer.is_valid();
-	if (render_layer.is_valid()) {
-		render_layer->disconnect(CoreStringName(changed), callable_mp(this, &GeometryInstance3D::_update_render_layer));
-	}
 	render_layer = p_render_layer;
-	if (render_layer.is_valid()) {
-		render_layer->connect(CoreStringName(changed), callable_mp(this, &GeometryInstance3D::_update_render_layer));
-	}
 	_update_render_layer();
 	if (was_valid != render_layer.is_valid()) {
 		// Membership toggled: show/hide the render_layer_order field in the inspector.
@@ -461,6 +433,9 @@ Ref<CompositorRenderLayer> GeometryInstance3D::get_render_layer() const {
 }
 
 void GeometryInstance3D::set_render_layer_order(int p_order) {
+	if (render_layer_order == p_order) {
+		return;
+	}
 	render_layer_order = p_order;
 	_update_render_layer();
 }

@@ -30,10 +30,27 @@
 
 #include "compositor.h"
 
+#include "core/core_string_names.h"
 #include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
+#include "core/templates/hash_set.h"
 #include "scene/resources/compositor_render_layer.h"
 #include "servers/rendering/rendering_server.h"
+
+// RenderLayerMembership/RenderLayerDeclaration (render-server side) mirror CompositorRenderLayer's
+// Format/SeedSource enums to avoid a scene->server header dependency. This TU sees both — and is where
+// `render_layers` is resolved to a RenderLayerDeclaration — so it is the single place that guarantees the
+// mirror never drifts: if either enum changes, one of these fails to compile.
+static_assert((int)RenderLayerMembership::FORMAT_INHERIT_SCENE_COLOR == (int)CompositorRenderLayer::FORMAT_INHERIT_SCENE_COLOR);
+static_assert((int)RenderLayerMembership::FORMAT_RGBA8 == (int)CompositorRenderLayer::FORMAT_RGBA8);
+static_assert((int)RenderLayerMembership::FORMAT_RGB10_A2 == (int)CompositorRenderLayer::FORMAT_RGB10_A2);
+static_assert((int)RenderLayerMembership::FORMAT_RGBA16F == (int)CompositorRenderLayer::FORMAT_RGBA16F);
+static_assert((int)RenderLayerMembership::FORMAT_R8 == (int)CompositorRenderLayer::FORMAT_R8);
+static_assert((int)RenderLayerMembership::FORMAT_R16UI == (int)CompositorRenderLayer::FORMAT_R16UI);
+static_assert((int)RenderLayerMembership::FORMAT_MAX == (int)CompositorRenderLayer::FORMAT_MAX);
+static_assert((int)RenderLayerMembership::SEED_SOURCE_CLEAR == (int)CompositorRenderLayer::SEED_SOURCE_CLEAR);
+static_assert((int)RenderLayerMembership::SEED_SOURCE_TEXTURE == (int)CompositorRenderLayer::SEED_SOURCE_TEXTURE);
+static_assert((int)RenderLayerMembership::SEED_SOURCE_MAX == (int)CompositorRenderLayer::SEED_SOURCE_MAX);
 
 /* Compositor Effect */
 
@@ -200,7 +217,69 @@ bool CompositorEffect::get_needs_separate_specular() const {
 }
 
 void CompositorEffect::set_render_layers(const TypedArray<CompositorRenderLayer> &p_render_layers) {
+	// Reconnect the per-layer `changed` listeners across the swap so a declared layer's format/seed/stage
+	// edits re-push the declaration live (the declaration is the single source of truth the renderer keys
+	// each layer's target from). Disconnect the layers leaving the set; connect the ones joining it.
+	for (int i = 0; i < render_layers.size(); i++) {
+		const Ref<CompositorRenderLayer> old_layer = render_layers[i];
+		if (old_layer.is_valid() && old_layer->is_connected(CoreStringName(changed), callable_mp(this, &CompositorEffect::_update_render_layers))) {
+			old_layer->disconnect(CoreStringName(changed), callable_mp(this, &CompositorEffect::_update_render_layers));
+		}
+	}
+
 	render_layers = p_render_layers;
+
+	for (int i = 0; i < render_layers.size(); i++) {
+		const Ref<CompositorRenderLayer> layer = render_layers[i];
+		if (layer.is_valid() && !layer->is_connected(CoreStringName(changed), callable_mp(this, &CompositorEffect::_update_render_layers))) {
+			layer->connect(CoreStringName(changed), callable_mp(this, &CompositorEffect::_update_render_layers));
+		}
+	}
+
+	_update_render_layers();
+}
+
+void CompositorEffect::_update_render_layers() {
+	// Resolve + validate the declaration at registration: a layer's identity (its object id) is the key its
+	// members reference and the engine derives the target's NTKey from, so declaring the same layer more than
+	// once is an ambiguous double-declaration. Diagnose it here — at edit time — rather than silently at render
+	// time; the duplicate is dropped from the pushed set. Null entries are tolerated as empty inspector slots
+	// (as `set_compositor_effects` does). The resolved RenderLayerDeclaration list is the authoritative record
+	// the render backend validates and keys each layer's target from; the render thread never dereferences the
+	// (main-thread-owned) resource.
+	Vector<RenderLayerDeclaration> declarations;
+	HashSet<ObjectID> seen_identities;
+	for (int i = 0; i < render_layers.size(); i++) {
+		const Ref<CompositorRenderLayer> layer = render_layers[i];
+		if (layer.is_null()) {
+			continue;
+		}
+		const ObjectID identity = layer->get_instance_id();
+		if (seen_identities.has(identity)) {
+			ERR_PRINT(vformat("CompositorEffect: the same CompositorRenderLayer is declared more than once in 'render_layers' (entry %d). Each layer must be declared by at most one entry; the duplicate is ignored.", i));
+			continue;
+		}
+		seen_identities.insert(identity);
+
+		RenderLayerDeclaration declaration;
+		declaration.identity = identity;
+		declaration.format = (RenderLayerMembership::Format)layer->get_format();
+		declaration.seed_source = (RenderLayerMembership::SeedSource)layer->get_seed_source();
+		declaration.stage = RSE::CompositorEffectCallbackType(layer->get_stage());
+		const Ref<Texture2D> seed_tex = layer->get_seed_texture();
+		if (seed_tex.is_valid()) {
+			declaration.seed_texture = seed_tex->get_rid();
+		}
+		declarations.push_back(declaration);
+	}
+
+	// Push the resolved declaration to the render backend (registration). Guarded on `rid` because the
+	// RenderingServer may not exist yet during headless/tooling resource loads (mirrors the other setters).
+	if (rid.is_valid()) {
+		RenderingServer *rs = RenderingServer::get_singleton();
+		ERR_FAIL_NULL(rs);
+		rs->compositor_effect_set_render_layers(rid, declarations);
+	}
 }
 
 TypedArray<CompositorRenderLayer> CompositorEffect::get_render_layers() const {

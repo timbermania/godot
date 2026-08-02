@@ -95,4 +95,36 @@ TEST_CASE("[CompositorRenderLayer] Distinct instances carry distinct identities"
 	CHECK(a->get_instance_id() != b->get_instance_id());
 }
 
+TEST_CASE("[CompositorEffect] render_layers declarations round-trip and tolerate duplicate identities") {
+	// render_layers is the effect's authoritative declaration of the layers it owns (pushed to the render
+	// backend at registration). The property stores what the inspector holds verbatim so it stays editable;
+	// validation (dropping duplicate identities / null slots from the pushed set) must never crash the setter.
+	Ref<CompositorEffect> effect = memnew(CompositorEffect);
+	Ref<CompositorRenderLayer> a = memnew(CompositorRenderLayer);
+	Ref<CompositorRenderLayer> b = memnew(CompositorRenderLayer);
+
+	TypedArray<CompositorRenderLayer> layers;
+	layers.push_back(a);
+	layers.push_back(b);
+	effect->set_render_layers(layers);
+	CHECK(effect->get_render_layers().size() == 2);
+
+	// Declaring the same layer twice is diagnosed and dropped from the pushed registration; the array is
+	// still stored verbatim. Suppress the expected error.
+	TypedArray<CompositorRenderLayer> with_dupe;
+	with_dupe.push_back(a);
+	with_dupe.push_back(a);
+	ERR_PRINT_OFF;
+	effect->set_render_layers(with_dupe);
+	ERR_PRINT_ON;
+	CHECK(effect->get_render_layers().size() == 2);
+
+	// A null entry is tolerated as an empty inspector slot (no crash, stored verbatim).
+	TypedArray<CompositorRenderLayer> with_null;
+	with_null.push_back(a);
+	with_null.push_back(Ref<CompositorRenderLayer>());
+	effect->set_render_layers(with_null);
+	CHECK(effect->get_render_layers().size() == 2);
+}
+
 } // namespace TestCompositorRenderLayer

@@ -826,6 +826,7 @@ public:
 	FUNC2(compositor_effect_set_enabled, RID, bool)
 	FUNC3(compositor_effect_set_callback, RID, RSE::CompositorEffectCallbackType, const Callable &)
 	FUNC3(compositor_effect_set_flag, RID, RSE::CompositorEffectFlags, bool)
+	FUNC2(compositor_effect_set_render_layers, RID, const Vector<RenderLayerDeclaration> &)
 
 	/* COMPOSITOR */
 

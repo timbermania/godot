@@ -75,6 +75,10 @@ protected:
 
 	void _call_render_callback(int p_effect_callback_type, const RenderData *p_render_data);
 
+	// Re-resolves the `render_layers` declaration and pushes it to the render backend. Called on assignment
+	// and whenever a declared layer emits `changed`, so editing a layer's format/seed/stage takes effect live.
+	void _update_render_layers();
+
 	GDVIRTUAL2(_render_callback, int, const RenderData *)
 
 public:

@@ -40,7 +40,10 @@
 #include "servers/rendering/renderer_rd/uniform_set_cache_rd.h"
 #include "servers/rendering/rendering_device.h"
 #include "servers/rendering/rendering_server_default.h"
+#include "servers/rendering/storage/compositor_storage.h"
 #include "servers/rendering/storage/ltc_lut.gen.h"
+
+#include "core/templates/hash_map.h"
 
 using namespace RendererSceneRenderImplementation;
 
@@ -2542,6 +2545,22 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 		// null here is a renderer bug, not a user misconfiguration. Hard-fail naming the renderer.
 		ERR_FAIL_COND_MSG(depth_texture.is_null(), "RenderForwardClustered: compositor render-layer pass has no resolved scene depth texture; cannot occlude held-out members.");
 
+		// Gather the effect-side layer declarations registered on this frame's compositor. A declaration is
+		// the authoritative registration: a held-out run only draws if some effect on this compositor declares
+		// its layer identity. An instance referencing an undeclared layer has no consumer and no engine-owned
+		// target, so its run is skipped (the GeometryInstance3D carries the editor config-warning for that
+		// case; a per-frame render-thread message would spam).
+		HashMap<ObjectID, RenderLayerDeclaration> declared_layers;
+		{
+			RendererCompositorStorage *comp_storage = RendererCompositorStorage::get_singleton();
+			const Vector<RID> layer_effects = comp_storage->compositor_get_compositor_effects(p_render_data->compositor, RSE::COMPOSITOR_EFFECT_CALLBACK_TYPE_ANY, true);
+			for (const RID &effect_rid : layer_effects) {
+				for (const RenderLayerDeclaration &decl : comp_storage->compositor_effect_get_render_layers(effect_rid)) {
+					declared_layers[decl.identity] = decl;
+				}
+			}
+		}
+
 		// Walk contiguous per-layer runs (sort_by_layer_order grouped the list by layer identity). Each
 		// run draws into its own engine-owned target. The single-fold proof has exactly one run.
 		uint32_t run_start = 0;
@@ -2554,10 +2573,25 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 			}
 			const uint32_t run_size = run_end - run_start;
 
-			// Format + seed are read from the render instance (pushed down from the CompositorRenderLayer
-			// resource on the main thread by GeometryInstance3D::_update_render_layer). The render thread
-			// never dereferences the (main-thread-owned) resource — run_layer is only an identity key.
-			const RD::DataFormat layer_format = _compositor_layer_rd_format(run_owner->render_layer.format, scene_color_format);
+			// The declaration is the authoritative registration for this layer identity. No declaration ⇒
+			// no consumer ⇒ no engine-owned target: skip the run (see the declaration map built above).
+			const RenderLayerDeclaration *declaration = declared_layers.getptr(run_layer);
+			if (declaration == nullptr) {
+				run_start = run_end;
+				continue;
+			}
+			// Refuse unsupported consume stages loudly, naming the renderer — a registration error, not a
+			// silent skip. v1 produces the held-out target for POST_TRANSPARENT consumers only.
+			if (declaration->stage != RSE::COMPOSITOR_EFFECT_CALLBACK_TYPE_POST_TRANSPARENT) {
+				ERR_PRINT_ONCE("RenderForwardClustered: a CompositorRenderLayer declares a consume stage this renderer does not support; only POST_TRANSPARENT is available. Skipping the layer.");
+				run_start = run_end;
+				continue;
+			}
+
+			// Format + seed are read from the effect-side declaration (the single source of truth, resolved
+			// from the CompositorRenderLayer resource on the main thread). Members carry only identity + order;
+			// the render thread never dereferences the (main-thread-owned) resource — run_layer is an identity key.
+			const RD::DataFormat layer_format = _compositor_layer_rd_format(declaration->format, scene_color_format);
 			const RID layer_texture = rb->get_compositor_layer_texture(run_layer, layer_format);
 			if (layer_texture.is_null()) {
 				// Allocation of the engine-owned target failed (e.g. an unsupported format on this device).
@@ -2578,8 +2612,8 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 			// (A SCENE_COLOR seed is a named future extension — gated behind an engine-written coverage channel —
 			// and is deliberately not part of the shipped SeedSource enum yet; see the proposal.)
 			bool seeded_from_texture = false;
-			if (run_owner->render_layer.seed_source == RenderLayerMembership::SEED_SOURCE_TEXTURE) {
-				const RID seed_rd = run_owner->render_layer.seed_texture.is_valid() ? texture_storage->texture_get_rd_texture(run_owner->render_layer.seed_texture) : RID();
+			if (declaration->seed_source == RenderLayerMembership::SEED_SOURCE_TEXTURE) {
+				const RID seed_rd = declaration->seed_texture.is_valid() ? texture_storage->texture_get_rd_texture(declaration->seed_texture) : RID();
 				if (seed_rd.is_null()) {
 					WARN_PRINT_ONCE("compositor_layer: SEED_SOURCE_TEXTURE layer has no valid seed_texture; seeding with CLEAR.");
 				} else {

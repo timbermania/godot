@@ -31,6 +31,7 @@
 #pragma once
 
 #include "core/templates/rid_owner.h"
+#include "servers/rendering/render_layer_membership.h"
 #include "servers/rendering/rendering_server_enums.h"
 
 class RendererCompositorStorage {
@@ -45,6 +46,11 @@ private:
 		Callable callback;
 
 		BitField<RSE::CompositorEffectFlags> flags = {};
+
+		// Layers this effect declares it owns, resolved from its `CompositorRenderLayer` resources on the
+		// main thread (see `CompositorEffect::set_render_layers`). The authoritative registration: the
+		// renderer validates these and keys each layer's held-out target from a declared `identity`.
+		Vector<RenderLayerDeclaration> render_layers;
 	};
 
 	mutable RID_Owner<CompositorEffect, true> compositor_effects_owner;
@@ -82,6 +88,9 @@ public:
 
 	void compositor_effect_set_flag(RID p_effect, RSE::CompositorEffectFlags p_flag, bool p_set);
 	bool compositor_effect_get_flag(RID p_effect, RSE::CompositorEffectFlags p_flag) const;
+
+	void compositor_effect_set_render_layers(RID p_effect, const Vector<RenderLayerDeclaration> &p_render_layers);
+	Vector<RenderLayerDeclaration> compositor_effect_get_render_layers(RID p_effect) const;
 
 	// Compositor
 	RID compositor_allocate();
