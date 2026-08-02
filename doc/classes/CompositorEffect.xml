@@ -24,6 +24,7 @@
 			<description>
 				Returns the [RID] of the engine-owned render target that holds the members of [param render_layer] (see [member GeometryInstance3D.render_layer]), so this effect can composite it back into the scene. Pass one of the resources listed in [member render_layers] — the same resource object the member instances reference, never a name or index.
 				This method may only be called from within [method _render_callback]; it reads the current frame's render buffers. It returns an empty [RID] if called at any other time, if [param render_layer] is [code]null[/code], or if no member drew into that layer this frame.
+				The target is resolved purely by the passed resource's identity; membership in [member render_layers] is [b]not[/b] enforced here. Any [CompositorRenderLayer] whose members drew this frame resolves, whether or not it is listed. [member render_layers] is a declarative hint (see its description), not an access gate.
 				[b]Note:[/b] Only supported by the Forward+ rendering method. See [method RenderingServer.is_compositor_layer_supported].
 			</description>
 		</method>
@@ -83,6 +84,7 @@
 		</member>
 		<member name="render_layers" type="CompositorRenderLayer[]" setter="set_render_layers" getter="get_render_layers">
 			The compositor render layers this effect consumes. Each [CompositorRenderLayer] listed here names a held-out target that member instances (see [member GeometryInstance3D.render_layer]) draw into; read the target back inside [method _render_callback] with [method get_layer_texture] to composite it into the scene. Declaring the layer here is what tells the editor which effect a layer belongs to.
+			[b]Note:[/b] This list is a declarative, editor-facing hint; it is not pushed to the [RenderingServer] and is not enforced. [method get_layer_texture] resolves a target by the passed resource's identity alone, so it will return a valid [RID] for a layer that is not listed here (as long as its members drew this frame). Keep this list in sync with the layers the effect actually reads so the editor wiring stays accurate.
 			[b]Note:[/b] Only supported by the Forward+ rendering method. See [method RenderingServer.is_compositor_layer_supported].
 		</member>
 	</members>

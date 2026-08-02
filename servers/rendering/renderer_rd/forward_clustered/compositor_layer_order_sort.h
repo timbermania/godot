@@ -67,17 +67,30 @@ struct CompositorLayerOrderComparator {
 	}
 };
 
-// Fills `r_order[0 .. p_size)` with a stable permutation of the element indices ordered by
-// (render_layer_order, submission index). `p_orders` holds one `render_layer_order` per element.
-// A list of fewer than two elements is left as the identity permutation.
-inline void compute_order(uint32_t *r_order, const int32_t *p_orders, uint32_t p_size) {
+// The "build identity permutation → stable sort" dance, shared verbatim by BOTH the unit-tested rule
+// (compute_order, below) and the shipped render-list sort (RenderList::sort_by_layer_order in
+// render_forward_clustered.h) so the loop under test IS the loop that runs in the render path — the two
+// differ only in which comparator they hand in. Fills `r_order[0 .. p_size)` with a permutation of the
+// element indices; a list of fewer than two elements is left as the identity permutation. `p_comparator`
+// is any SortArray strict-weak-ordering over `uint32_t` indices.
+template <typename Comparator>
+inline void compute_index_permutation(uint32_t *r_order, uint32_t p_size, const Comparator &p_comparator) {
 	for (uint32_t i = 0; i < p_size; i++) {
 		r_order[i] = i;
 	}
 	if (p_size < 2) {
 		return;
 	}
-	SortArray<uint32_t, CompositorLayerOrderComparator> sorter;
-	sorter.compare.orders = p_orders;
+	SortArray<uint32_t, Comparator> sorter;
+	sorter.compare = p_comparator;
 	sorter.sort(r_order, p_size);
+}
+
+// Fills `r_order[0 .. p_size)` with a stable permutation of the element indices ordered by
+// (render_layer_order, submission index). `p_orders` holds one `render_layer_order` per element.
+// A list of fewer than two elements is left as the identity permutation.
+inline void compute_order(uint32_t *r_order, const int32_t *p_orders, uint32_t p_size) {
+	CompositorLayerOrderComparator comparator;
+	comparator.orders = p_orders;
+	compute_index_permutation(r_order, p_size, comparator);
 }

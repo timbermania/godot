@@ -215,6 +215,9 @@ RID CompositorEffect::get_layer_texture(const Ref<CompositorRenderLayer> &p_rend
 	ERR_FAIL_COND_V(rb.is_null(), RID());
 
 	// Keyed by the layer resource's own object id — the same identity the members reference.
+	// Resolution is by identity only; membership in `render_layers` is intentionally NOT validated here
+	// (that property is a declarative editor hint, never pushed to the RenderingServer — see its docs).
+	// A per-frame render-thread WARN on non-membership would spam and gate legitimate uses, so it's advisory.
 	return rb->get_compositor_layer_texture(p_render_layer->get_instance_id());
 }
 

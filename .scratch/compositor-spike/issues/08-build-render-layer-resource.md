@@ -62,6 +62,10 @@ engine-owned target both land; no routing yet (Step 4/5 wires the accessor to a 
 - **Format→`RD::DataFormat` mapping is deferred to the caller (Step 4/5):** the accessor takes an already-
   resolved `RD::DataFormat`; the routing code must map `CompositorRenderLayer::Format` → RD, resolving
   `INHERIT_SCENE_COLOR` to `render_scene_buffers->get_base_data_format()`.
-- Format is fixed at first access (first-writer-wins **is acceptable here** because the key IS the resource
-  identity and a resource has one `format` — not the aliasing hazard the plan warned about, which was about
-  distinct resources colliding).
+- Format tracks the resource's current `format` **live**: `get_compositor_layer_texture(id, data_format)`
+  compares the cached target's `RD::DataFormat` against the requested one and reallocates on mismatch (free +
+  erase + recreate), so an inspector `format` edit — which `GeometryInstance3D` already re-pushes via the
+  resource's `changed` signal — actually takes effect instead of being silently dropped (first-writer-wins).
+  Unambiguous because every member of a layer resolves the SAME `CompositorRenderLayer::get_format()`, so
+  members never disagree and there is no per-member realloc thrash. (This closes the code-review FIX 1
+  finding; the earlier "format fixed at first access / first-writer-wins acceptable" note was superseded.)

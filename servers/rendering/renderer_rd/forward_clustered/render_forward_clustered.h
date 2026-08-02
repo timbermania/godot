@@ -764,12 +764,11 @@ private:
 			}
 			LocalVector<uint32_t> perm;
 			perm.resize(size);
-			for (uint32_t i = 0; i < size; i++) {
-				perm[i] = i;
-			}
-			SortArray<uint32_t, SortByLayerThenOrder> sorter;
-			sorter.compare.elements = elements.ptr();
-			sorter.sort(perm.ptr(), size);
+			SortByLayerThenOrder comparator;
+			comparator.elements = elements.ptr();
+			// Same identity-perm + stable-sort dance as the unit-tested compute_order(); only the
+			// comparator differs (compound layer-then-order here vs. bare order key there).
+			compute_index_permutation(perm.ptr(), size, comparator);
 			LocalVector<GeometryInstanceSurfaceDataCache *> sorted;
 			sorted.resize(size);
 			for (uint32_t i = 0; i < size; i++) {

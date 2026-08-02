@@ -515,8 +515,20 @@ RID RenderSceneBuffersRD::get_compositor_layer_texture(uint64_t p_layer_id, RD::
 	// Key on the layer resource's object id so every reference to the same resource
 	// resolves to a single engine-allocated target (no first-writer-wins aliasing).
 	const StringName layer_name = itos(p_layer_id);
-	if (has_texture(RB_SCOPE_COMPOSITOR_LAYER, layer_name)) {
-		return get_texture(RB_SCOPE_COMPOSITOR_LAYER, layer_name);
+	const NTKey key(RB_SCOPE_COMPOSITOR_LAYER, layer_name);
+	if (named_textures.has(key)) {
+		// Honor the live-edit path: a CompositorRenderLayer `format` edit re-pushes a new RD::DataFormat
+		// here (GeometryInstance3D reconnects to the resource's `changed` signal precisely so this is live).
+		// Every member of a layer resolves the SAME CompositorRenderLayer::get_format(), so members never
+		// disagree on the format and there is no per-member realloc thrash. If the cached target's format
+		// still matches, reuse it; otherwise free and reallocate so the inspector edit actually takes effect
+		// instead of being silently dropped (first-writer-wins on format).
+		NamedTexture &named_texture = named_textures[key];
+		if (named_texture.format.format == p_data_format) {
+			return named_texture.texture;
+		}
+		free_named_texture(named_texture);
+		named_textures.erase(key);
 	}
 
 	// Size and view_count are structural invariants: the target matches the scene's

@@ -118,6 +118,13 @@ NOT `--headless`; `scons platform=linuxbsd target=editor dev_build=yes -j24`).
   free function in `compositor_layer_order_sort.h`; both `CompositorLayerOrderComparator` and the compound
   comparator now call it, so the tested code IS the shipped code. Ordering behavior unchanged (5/5 unit +
   add/sub/mix fold all still green, identical luminance).
+  **Post-review fix 2 (2026-08-01, `/code-review ultra` round 2, FIX 2):** the leaf *comparator* was shared,
+  but the "build identity permutation → `SortArray` → scatter-back" *dance* was still written twice — once in
+  the unit-tested `compute_order()` and once in the shipped `RenderList::sort_by_layer_order()`
+  (`render_forward_clustered.h`, the untested copy). Extracted a single `compute_index_permutation<Comparator>()`
+  template in `compositor_layer_order_sort.h`; both call sites now share it (differing only in which comparator
+  they hand in), so the permutation mechanism under test IS the one shipped. Behavior unchanged (5/5 unit +
+  add/sub/mix all PASS, identical luminance).
 - [Build · Step 2: register `compositor_layer` render_mode + shader-variant flag + Mobile gate](issues/07-build-render-mode-registration.md) —
   **built + verified.** The general `compositor_layer` render_mode registered globally
   (`shader_types.cpp`) + a `compositor_layer` shader-variant bool bound on both Forward+ and Mobile
@@ -143,6 +150,14 @@ NOT `--headless`; `scons platform=linuxbsd target=editor dev_build=yes -j24`).
   `stage` field is never wired to the pass (hardcoded POST_TRANSPARENT per plan Q4's deferred earlier-path),
   so the setter `ERR_FAIL_COND`-rejects any non-`POST_TRANSPARENT` value instead of silently ignoring it,
   and the inspector hint offers only that one value. Added a rejection unit test (5/5 green).
+  **Post-review fix 2 (2026-08-01, `/code-review ultra` round 2, FIX 1):** `get_compositor_layer_texture(id,
+  data_format)` no longer returns the cached target blindly on a hit — it compares the cached
+  `RD::DataFormat` and, on mismatch, frees + erases + reallocates. This honors the live-edit path already
+  wired on the resource side (`GeometryInstance3D` reconnects to the layer's `changed` signal so a `format`
+  inspector edit re-pushes), which the old first-writer-wins cache silently dropped. Unambiguous: every
+  member of a layer resolves the SAME `get_format()`, so no per-member realloc thrash. Ticket 08's stale
+  "format fixed at first access" note updated. Cache-*hit* hot path re-verified end-to-end: add/sub/mix all
+  PASS. (Realloc *branch* reasoned + build-clean but not exercised live — needs a runtime format edit + RD.)
 - [Build · Step 4: per-instance props + fill routing + new render list](issues/09-build-instance-props-fill-routing.md) —
   **built + verified windowed.** Full per-instance plumbing (`GeometryInstance3D.render_layer` [Ref] +
   `render_layer_order` [int] → RS `instance_geometry_set_render_layer(RID, ObjectID, int32_t)` → scene_cull
@@ -227,6 +242,13 @@ NOT `--headless`; `scons platform=linuxbsd target=editor dev_build=yes -j24`).
   fixed point (after the transparent pass)", and the `stage` member documents that only
   `EFFECT_CALLBACK_TYPE_POST_TRANSPARENT` is honored in v1 (earlier stages reserved; `set_stage` rejects
   them). Paired with the ticket-08 setter gate. Doc-accuracy debt closed.
+  **Post-review fix 2 (2026-08-01, `/code-review ultra` round 2, FIX 3):** clarified that `render_layers` is
+  a declarative editor-facing hint, NOT an access gate — `get_layer_texture` resolves a target by the passed
+  resource's identity alone and returns a valid RID even for a layer not listed in `render_layers`. Decided
+  (upstream lens) to document rather than enforce: the property is never pushed to RS, and a per-frame
+  render-thread WARN on non-membership would spam and gate legitimate uses. `CompositorEffect.xml`
+  (`render_layers` + `get_layer_texture`) + a code comment at `compositor.cpp:get_layer_texture` now state
+  this. No behavior change. Doc-accuracy debt closed.
 - [Build · seed: real `TEXTURE` seed source](issues/13-build-texture-seed-source.md) — **built + verified
   windowed; the engine primitive is now COMPLETE.** Added `seed_texture : Texture2D` to
   `CompositorRenderLayer`; extended the Step-6 push-down `FUNC5`→`FUNC6` so the seed's *RenderingServer* RID
