@@ -43,9 +43,8 @@
 // can be unit-tested without constructing renderer instances (see
 // tests/servers/rendering/test_compositor_layer_order_sort.cpp).
 //
-// The key is an exact `int32_t` (the general primitive's `render_layer_order`), not the spike's
-// uncapped `float sorting_offset`: an int has no float32-ULP cliff and cannot be NaN, so the NaN
-// canonicalization the float version needed to stay a valid strict weak ordering is gone.
+// The key is an exact `int32_t` (`render_layer_order`), not a float: an int has no float32-ULP cliff
+// and cannot be NaN, so it is a valid strict weak ordering with no canonicalization needed.
 
 // The stable ordering rule itself, factored out so the unit-tested code IS the shipped code: the
 // real render path's compound comparator (SortByLayerThenOrder in render_forward_clustered.h) sorts
