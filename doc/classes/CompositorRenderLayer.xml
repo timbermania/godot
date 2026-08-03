@@ -31,19 +31,10 @@
 		<constant name="FORMAT_RGBA8" value="1" enum="Format">
 			8 bits per channel RGBA unsigned normalized.
 		</constant>
-		<constant name="FORMAT_RGB10_A2" value="2" enum="Format">
-			10 bits per RGB channel plus 2-bit alpha, unsigned normalized.
-		</constant>
-		<constant name="FORMAT_RGBA16F" value="3" enum="Format">
+		<constant name="FORMAT_RGBA16F" value="2" enum="Format">
 			16 bits per channel RGBA half-float.
 		</constant>
-		<constant name="FORMAT_R8" value="4" enum="Format">
-			Single 8-bit unsigned normalized channel.
-		</constant>
-		<constant name="FORMAT_R16UI" value="5" enum="Format">
-			Single 16-bit unsigned integer channel.
-		</constant>
-		<constant name="FORMAT_MAX" value="6" enum="Format">
+		<constant name="FORMAT_MAX" value="3" enum="Format">
 			Represents the size of the [enum Format] enum.
 		</constant>
 		<constant name="SEED_SOURCE_CLEAR" value="0" enum="SeedSource">

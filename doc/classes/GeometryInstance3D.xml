@@ -68,7 +68,7 @@
 		</member>
 		<member name="render_layer" type="CompositorRenderLayer" setter="set_render_layer" getter="get_render_layer">
 			If set, this instance is held out of the normal render lists and drawn into the referenced [CompositorRenderLayer]'s target instead, to be composited back by a [CompositorEffect]. Only materials that use [code]render_mode compositor_layer[/code] are held out; a member instance whose material does not opt in still renders normally. If [code]null[/code] (the default), the instance renders normally.
-			[b]Note:[/b] This is an experimental rendering feature and only supported by the Forward+ rendering method. See [method RenderingServer.is_compositor_layer_supported].
+			[b]Note:[/b] This is an experimental rendering feature and only supported by the Forward+ rendering method. Check [method RenderingServer.get_current_rendering_method] to feature-detect at runtime.
 		</member>
 		<member name="render_layer_order" type="int" setter="set_render_layer_order" getter="get_render_layer_order" default="0">
 			The caller-controlled draw order of this instance within its [member render_layer], as an exact integer. Members of a layer composite in ascending [member render_layer_order] (painter order), independent of camera depth; ties break by stable insertion order. Has no effect unless [member render_layer] is set.

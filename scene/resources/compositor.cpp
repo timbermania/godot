@@ -43,10 +43,7 @@
 // mirror never drifts: if either enum changes, one of these fails to compile.
 static_assert((int)RenderLayerMembership::FORMAT_INHERIT_SCENE_COLOR == (int)CompositorRenderLayer::FORMAT_INHERIT_SCENE_COLOR);
 static_assert((int)RenderLayerMembership::FORMAT_RGBA8 == (int)CompositorRenderLayer::FORMAT_RGBA8);
-static_assert((int)RenderLayerMembership::FORMAT_RGB10_A2 == (int)CompositorRenderLayer::FORMAT_RGB10_A2);
 static_assert((int)RenderLayerMembership::FORMAT_RGBA16F == (int)CompositorRenderLayer::FORMAT_RGBA16F);
-static_assert((int)RenderLayerMembership::FORMAT_R8 == (int)CompositorRenderLayer::FORMAT_R8);
-static_assert((int)RenderLayerMembership::FORMAT_R16UI == (int)CompositorRenderLayer::FORMAT_R16UI);
 static_assert((int)RenderLayerMembership::FORMAT_MAX == (int)CompositorRenderLayer::FORMAT_MAX);
 static_assert((int)RenderLayerMembership::SEED_SOURCE_CLEAR == (int)CompositorRenderLayer::SEED_SOURCE_CLEAR);
 static_assert((int)RenderLayerMembership::SEED_SOURCE_TEXTURE == (int)CompositorRenderLayer::SEED_SOURCE_TEXTURE);

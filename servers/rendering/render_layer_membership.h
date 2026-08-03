@@ -49,10 +49,7 @@ struct RenderLayerMembership {
 	enum Format {
 		FORMAT_INHERIT_SCENE_COLOR,
 		FORMAT_RGBA8,
-		FORMAT_RGB10_A2,
 		FORMAT_RGBA16F,
-		FORMAT_R8,
-		FORMAT_R16UI,
 		FORMAT_MAX,
 	};
 

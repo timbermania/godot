@@ -58,14 +58,8 @@ static RD::DataFormat _compositor_layer_rd_format(RenderLayerMembership::Format 
 	switch (p_format) {
 		case RenderLayerMembership::FORMAT_RGBA8:
 			return RD::DATA_FORMAT_R8G8B8A8_UNORM;
-		case RenderLayerMembership::FORMAT_RGB10_A2:
-			return RD::DATA_FORMAT_A2B10G10R10_UNORM_PACK32;
 		case RenderLayerMembership::FORMAT_RGBA16F:
 			return RD::DATA_FORMAT_R16G16B16A16_SFLOAT;
-		case RenderLayerMembership::FORMAT_R8:
-			return RD::DATA_FORMAT_R8_UNORM;
-		case RenderLayerMembership::FORMAT_R16UI:
-			return RD::DATA_FORMAT_R16_UINT;
 		case RenderLayerMembership::FORMAT_INHERIT_SCENE_COLOR:
 		default:
 			return p_scene_color_format;

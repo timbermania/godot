@@ -2107,18 +2107,6 @@
 				[b]Warning:[/b] This function is primarily intended for editor usage. For in-game use cases, prefer physics collision.
 			</description>
 		</method>
-		<method name="is_compositor_layer_supported" qualifiers="const">
-			<return type="bool" />
-			<description>
-				Returns [code]true[/code] if the current rendering method supports compositor render layers (held-out [CompositorRenderLayer] targets composited by a [CompositorEffect]). Only the Forward+ rendering method implements them.
-				Feature-detect with [method Object.has_method] before calling, so scripts still load on engine builds that predate this method:
-				[codeblock]
-				if RenderingServer.has_method("is_compositor_layer_supported") and RenderingServer.is_compositor_layer_supported():
-				    # Use the compositor render-layer path.
-				    pass
-				[/codeblock]
-			</description>
-		</method>
 		<method name="is_on_render_thread">
 			<return type="bool" />
 			<description>

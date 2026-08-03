@@ -35,7 +35,7 @@
 void CompositorRenderLayer::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_format", "format"), &CompositorRenderLayer::set_format);
 	ClassDB::bind_method(D_METHOD("get_format"), &CompositorRenderLayer::get_format);
-	ADD_PROPERTY(PropertyInfo(Variant::INT, "format", PROPERTY_HINT_ENUM, "Inherit Scene Color,RGBA8,RGB10A2,RGBA16F,R8,R16UI"), "set_format", "get_format");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "format", PROPERTY_HINT_ENUM, "Inherit Scene Color,RGBA8,RGBA16F"), "set_format", "get_format");
 
 	ClassDB::bind_method(D_METHOD("set_seed_source", "seed_source"), &CompositorRenderLayer::set_seed_source);
 	ClassDB::bind_method(D_METHOD("get_seed_source"), &CompositorRenderLayer::get_seed_source);
@@ -56,10 +56,7 @@ void CompositorRenderLayer::_bind_methods() {
 
 	BIND_ENUM_CONSTANT(FORMAT_INHERIT_SCENE_COLOR);
 	BIND_ENUM_CONSTANT(FORMAT_RGBA8);
-	BIND_ENUM_CONSTANT(FORMAT_RGB10_A2);
 	BIND_ENUM_CONSTANT(FORMAT_RGBA16F);
-	BIND_ENUM_CONSTANT(FORMAT_R8);
-	BIND_ENUM_CONSTANT(FORMAT_R16UI);
 	BIND_ENUM_CONSTANT(FORMAT_MAX);
 
 	BIND_ENUM_CONSTANT(SEED_SOURCE_CLEAR);

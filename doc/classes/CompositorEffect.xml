@@ -25,7 +25,7 @@
 				Returns the [RID] of the engine-owned render target that holds the members of [param render_layer] (see [member GeometryInstance3D.render_layer]), so this effect can composite it back into the scene. Pass one of the resources listed in [member render_layers] — the same resource object the member instances reference, never a name or index.
 				This method may only be called from within [method _render_callback]; it reads the current frame's render buffers. It returns an empty [RID] if called at any other time, if [param render_layer] is [code]null[/code], or if no member drew into that layer this frame.
 				The target is resolved by the passed resource's identity. A target exists only for a layer some effect declares in [member render_layers] — the declaration is what makes the engine produce it — and whose members drew this frame; pass the same resource object the members reference.
-				[b]Note:[/b] Only supported by the Forward+ rendering method. See [method RenderingServer.is_compositor_layer_supported].
+				[b]Note:[/b] Only supported by the Forward+ rendering method. Check [method RenderingServer.get_current_rendering_method] to feature-detect at runtime.
 			</description>
 		</method>
 	</methods>
@@ -85,7 +85,7 @@
 		<member name="render_layers" type="CompositorRenderLayer[]" setter="set_render_layers" getter="get_render_layers">
 			The compositor render layers this effect owns. Each [CompositorRenderLayer] listed here declares a held-out target that member instances (see [member GeometryInstance3D.render_layer]) draw into; read the target back inside [method _render_callback] with [method get_layer_texture] to composite it into the scene.
 			This declaration is authoritative: it is resolved and pushed to the [RenderingServer] at registration, and the engine only produces a held-out target for a layer that some effect declares here. A member instance that references a layer no effect declares produces no target. Declaring the same layer more than once is reported and the duplicate ignored. The layer's format, seed source, and stage are read from the [CompositorRenderLayer] resource itself (the single source of truth), so editing them takes effect live.
-			[b]Note:[/b] Only supported by the Forward+ rendering method; on other renderers a declared layer is refused, naming the renderer. See [method RenderingServer.is_compositor_layer_supported].
+			[b]Note:[/b] Only supported by the Forward+ rendering method; on other renderers a declared layer is refused, naming the renderer. Check [method RenderingServer.get_current_rendering_method] to feature-detect at runtime.
 		</member>
 	</members>
 	<constants>

@@ -46,15 +46,13 @@ class CompositorRenderLayer : public Resource {
 	GDCLASS(CompositorRenderLayer, Resource);
 
 public:
-	// Enumerated color format for the layer target. Mirrors the #7916 compositor
-	// buffer-format set. INHERIT_SCENE_COLOR matches the scene's base color format.
+	// Enumerated color format for the layer target. INHERIT_SCENE_COLOR matches the scene's base color
+	// format (the sane default, since members shade through their real material); RGBA8/RGBA16F cover the
+	// LDR/HDR cases. More formats can be added when a use case needs one.
 	enum Format {
 		FORMAT_INHERIT_SCENE_COLOR,
 		FORMAT_RGBA8,
-		FORMAT_RGB10_A2,
 		FORMAT_RGBA16F,
-		FORMAT_R8,
-		FORMAT_R16UI,
 		FORMAT_MAX,
 	};
 
