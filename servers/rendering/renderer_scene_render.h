@@ -92,6 +92,7 @@ public:
 	void compositor_effect_set_enabled(RID p_compositor, bool p_enabled);
 	void compositor_effect_set_callback(RID p_compositor, RSE::CompositorEffectCallbackType p_callback_type, const Callable &p_callback);
 	void compositor_effect_set_flag(RID p_compositor, RSE::CompositorEffectFlags p_flag, bool p_set);
+	void compositor_effect_set_render_layers(RID p_compositor, const Vector<RenderLayerDeclaration> &p_render_layers);
 
 	/* COMPOSITOR API */
 

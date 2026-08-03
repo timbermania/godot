@@ -39,6 +39,7 @@
 #include "servers/rendering/renderer_rd/uniform_set_cache_rd.h"
 #include "servers/rendering/rendering_device.h"
 #include "servers/rendering/rendering_server_default.h"
+#include "servers/rendering/storage/compositor_storage.h"
 #include "servers/rendering/storage/ltc_lut.gen.h"
 
 #ifndef XR_DISABLED
@@ -887,6 +888,21 @@ void RenderForwardMobile::_render_scene(RenderDataRD *p_render_data, const Color
 	bool ce_has_post_opaque = _has_compositor_effect(RSE::COMPOSITOR_EFFECT_CALLBACK_TYPE_POST_OPAQUE, p_render_data);
 	bool ce_has_pre_transparent = _has_compositor_effect(RSE::COMPOSITOR_EFFECT_CALLBACK_TYPE_PRE_TRANSPARENT, p_render_data);
 	bool ce_has_post_transparent = _has_compositor_effect(RSE::COMPOSITOR_EFFECT_CALLBACK_TYPE_POST_TRANSPARENT, p_render_data);
+
+	// Compositor render-layers are a Forward+ (clustered) feature — there is no held-out pass here. Refuse
+	// declared layers loudly at registration, naming the renderer, rather than silently producing no target.
+	// This is the Mobile-side registration half of the "Forward+ only" invariant; the `compositor_layer`
+	// shader render_mode gate (SceneShaderForwardMobile) is the other half.
+	{
+		RendererCompositorStorage *comp_storage = RendererCompositorStorage::get_singleton();
+		const Vector<RID> layer_effects = comp_storage->compositor_get_compositor_effects(p_render_data->compositor, RSE::COMPOSITOR_EFFECT_CALLBACK_TYPE_ANY, true);
+		for (const RID &effect_rid : layer_effects) {
+			if (!comp_storage->compositor_effect_get_render_layers(effect_rid).is_empty()) {
+				ERR_PRINT_ONCE("CompositorEffect.render_layers is not supported on the Mobile renderer (Forward+ only). The declared compositor render-layers will not be produced; use the Forward+ rendering method.");
+				break;
+			}
+		}
+	}
 
 	if (ce_has_post_opaque) {
 		// As we're doing opaque and sky in subpasses we don't support this *yet*

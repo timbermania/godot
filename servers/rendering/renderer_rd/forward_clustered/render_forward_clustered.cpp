@@ -40,13 +40,31 @@
 #include "servers/rendering/renderer_rd/uniform_set_cache_rd.h"
 #include "servers/rendering/rendering_device.h"
 #include "servers/rendering/rendering_server_default.h"
+#include "servers/rendering/storage/compositor_storage.h"
 #include "servers/rendering/storage/ltc_lut.gen.h"
+
+#include "core/templates/hash_map.h"
 
 using namespace RendererSceneRenderImplementation;
 
 #define PRELOAD_PIPELINES_ON_SURFACE_CACHE_CONSTRUCTION 1
 
 #define FADE_ALPHA_PASS_THRESHOLD 0.999
+
+// Maps a CompositorRenderLayer's declared color format to a concrete RD data format for the
+// engine-owned target. INHERIT_SCENE_COLOR resolves to the scene's base color format (the
+// held-out members shade through their real material, so matching scene color is the sane default).
+static RD::DataFormat _compositor_layer_rd_format(RenderLayerMembership::Format p_format, RD::DataFormat p_scene_color_format) {
+	switch (p_format) {
+		case RenderLayerMembership::FORMAT_RGBA8:
+			return RD::DATA_FORMAT_R8G8B8A8_UNORM;
+		case RenderLayerMembership::FORMAT_RGBA16F:
+			return RD::DATA_FORMAT_R16G16B16A16_SFLOAT;
+		case RenderLayerMembership::FORMAT_INHERIT_SCENE_COLOR:
+		default:
+			return p_scene_color_format;
+	}
+}
 
 void RenderForwardClustered::RenderBufferDataForwardClustered::ensure_specular() {
 	ERR_FAIL_NULL(render_buffers);
@@ -877,7 +895,11 @@ void RenderForwardClustered::_fill_instance_data(RenderListType p_render_list, i
 
 		const bool cant_repeat = instance_data.flags & INSTANCE_DATA_FLAG_MULTIMESH || inst->mesh_instance.is_valid();
 
-		if (prev_surface != nullptr && !cant_repeat && prev_surface->sort.sort_key1 == surface->sort.sort_key1 && prev_surface->sort.sort_key2 == surface->sort.sort_key2 && inst->mirror == prev_surface->owner->mirror && repeats < RenderElementInfo::MAX_REPEATS) {
+		// The last term keeps a repeat (instanced) group from spanning a compositor render-layer
+		// boundary: the held-out pass draws each layer as its own contiguous element range, so an
+		// instanced group that straddled two layers would draw into the wrong target. It is a no-op
+		// for every other list, where `render_layer` is null on all instances.
+		if (prev_surface != nullptr && !cant_repeat && prev_surface->sort.sort_key1 == surface->sort.sort_key1 && prev_surface->sort.sort_key2 == surface->sort.sort_key2 && inst->mirror == prev_surface->owner->mirror && inst->render_layer.layer_id == prev_surface->owner->render_layer.layer_id && repeats < RenderElementInfo::MAX_REPEATS) {
 			//this element is the same as the previous one, count repeats to draw it using instancing
 			repeats++;
 		} else {
@@ -943,9 +965,10 @@ void RenderForwardClustered::_fill_render_list(RenderListType p_render_list, con
 	if (!p_append) {
 		rl->clear();
 		if (p_render_list == RENDER_LIST_OPAQUE) {
-			// Opaque fills motion and alpha lists.
+			// Opaque fills motion, alpha, and compositor-layer lists.
 			render_list[RENDER_LIST_MOTION].clear();
 			render_list[RENDER_LIST_ALPHA].clear();
+			render_list[RENDER_LIST_COMPOSITOR_LAYER].clear();
 		}
 	}
 
@@ -1142,21 +1165,32 @@ void RenderForwardClustered::_fill_render_list(RenderListType p_render_list, con
 					force_alpha = true;
 				}
 
-				if (!force_alpha && (surf->flags & (GeometryInstanceSurfaceDataCache::FLAG_PASS_DEPTH | GeometryInstanceSurfaceDataCache::FLAG_PASS_OPAQUE))) {
-					rl->add_element(surf);
-				}
-
-				if (force_alpha || (surf->flags & GeometryInstanceSurfaceDataCache::FLAG_PASS_ALPHA)) {
-					surf->color_pass_inclusion_mask = COLOR_PASS_FLAG_TRANSPARENT;
-					render_list[RENDER_LIST_ALPHA].add_element(surf);
-					if (uses_gi) {
-						surf->sort.uses_forward_gi = 1;
-					}
-				} else if (p_using_motion_pass && (uses_motion || (surf->flags & GeometryInstanceSurfaceDataCache::FLAG_USES_MOTION_VECTOR))) {
-					surf->color_pass_inclusion_mask = COLOR_PASS_FLAG_MOTION_VECTORS;
-					render_list[RENDER_LIST_MOTION].add_element(surf);
-				} else {
+				// Compositor render-layer members are pulled out of the normal opaque/alpha/motion
+				// passes and collected into an isolated, engine-owned list that a CompositorEffect
+				// consumes (drawn by the held-out pass, Step 5). They still shade through their real
+				// material; the engine only retargets where the output lands. Membership =
+				// `render_mode compositor_layer` (a batch-safe shader permutation) AND a valid
+				// per-instance render_layer identity.
+				if (surf->shader != nullptr && surf->shader->compositor_layer && inst->render_layer.is_member()) {
 					surf->color_pass_inclusion_mask = 0;
+					render_list[RENDER_LIST_COMPOSITOR_LAYER].add_element(surf);
+				} else {
+					if (!force_alpha && (surf->flags & (GeometryInstanceSurfaceDataCache::FLAG_PASS_DEPTH | GeometryInstanceSurfaceDataCache::FLAG_PASS_OPAQUE))) {
+						rl->add_element(surf);
+					}
+
+					if (force_alpha || (surf->flags & GeometryInstanceSurfaceDataCache::FLAG_PASS_ALPHA)) {
+						surf->color_pass_inclusion_mask = COLOR_PASS_FLAG_TRANSPARENT;
+						render_list[RENDER_LIST_ALPHA].add_element(surf);
+						if (uses_gi) {
+							surf->sort.uses_forward_gi = 1;
+						}
+					} else if (p_using_motion_pass && (uses_motion || (surf->flags & GeometryInstanceSurfaceDataCache::FLAG_USES_MOTION_VECTOR))) {
+						surf->color_pass_inclusion_mask = COLOR_PASS_FLAG_MOTION_VECTORS;
+						render_list[RENDER_LIST_MOTION].add_element(surf);
+					} else {
+						surf->color_pass_inclusion_mask = 0;
+					}
 				}
 
 				if (uses_lightmap) {
@@ -1720,6 +1754,12 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 	bool is_reflection_probe = p_render_data->reflection_probe.is_valid();
 	bool is_multiview = rb->get_view_count() > 1;
 
+	// Reset the per-frame "which compositor render-layers drew this frame" signal before anything can
+	// populate it. Held-out layer targets persist across frames (named_textures), so a consumer at
+	// POST_TRANSPARENT must be told which layers actually had members this frame; a frame with zero
+	// held-out members skips the pass entirely (below), so this reset must be unconditional here.
+	rb->reset_compositor_layers_rendered();
+
 	static const int texture_multisamples[RSE::VIEWPORT_MSAA_MAX] = { 1, 2, 4, 8 };
 
 	//first of all, make a new render pass
@@ -1916,11 +1956,16 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 	render_list[RENDER_LIST_OPAQUE].sort_by_key();
 	render_list[RENDER_LIST_MOTION].sort_by_key();
 	render_list[RENDER_LIST_ALPHA].sort_by_reverse_depth_and_priority();
+	render_list[RENDER_LIST_COMPOSITOR_LAYER].sort_by_layer_order(); // caller order (render_layer_order), never camera depth
 
 	int *render_info = p_render_data->render_info ? p_render_data->render_info->info[RSE::VIEWPORT_RENDER_INFO_TYPE_VISIBLE] : (int *)nullptr;
 	_fill_instance_data(RENDER_LIST_OPAQUE, render_info);
 	_fill_instance_data(RENDER_LIST_MOTION, render_info);
 	_fill_instance_data(RENDER_LIST_ALPHA, render_info);
+	// Compositor render-layer members were held out of the color-pass lists; fill their instance
+	// data too so the held-out pass (below, before POST_TRANSPARENT) can draw them. The list is
+	// already grouped by layer identity, so each layer occupies a contiguous element range.
+	_fill_instance_data(RENDER_LIST_COMPOSITOR_LAYER, render_info);
 
 	RD::get_singleton()->draw_command_end_label();
 
@@ -2254,6 +2299,166 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 		}
 	}
 
+	// Compositor render-layer held-out pass. Draw the members collected into RENDER_LIST_COMPOSITOR_LAYER
+	// (held out of the color pass, grouped by layer identity and ordered by render_layer_order) into their
+	// engine-owned target(s) so a CompositorEffect can composite each layer back. The engine owns the target:
+	// it allocates on first access (get_compositor_layer_texture) and seeds it per the layer's seed_source.
+	//
+	// Parameterized by consume stage so the held-out draw can sit on either side of the transparent pass:
+	// POST_OPAQUE draws before it (a consumer composites the target under the engine's transparents),
+	// POST_TRANSPARENT after the transparent resolve (v1 behavior). Both are post-resolve; the stage is an
+	// ordering knob, not a sample-count one.
+	// p_env_uniform_buffer_index is the environment UBO to reuse (opaque UBO at the POST_OPAQUE site, transparent
+	// at the POST_TRANSPARENT site). The draw occludes against the shared resolved scene depth with depth-write
+	// off (transparent pipeline), so scene depth is never corrupted.
+	auto draw_compositor_render_layers = [&](RSE::CompositorEffectCallbackType p_target_stage, uint32_t p_env_uniform_buffer_index) {
+		if (rb_data.is_null() || render_list[RENDER_LIST_COMPOSITOR_LAYER].elements.size() == 0) {
+			return;
+		}
+
+		RenderList &layer_list = render_list[RENDER_LIST_COMPOSITOR_LAYER];
+		const uint32_t layer_element_count = layer_list.elements.size();
+		// Target size and view_count match the render target by construction (the engine allocates the target),
+		// so size/MSAA/view-count are structural invariants here — no runtime check needed.
+		const uint32_t layer_view_count = p_render_data->scene_data->view_count;
+		const uint32_t compositor_layer_color_pass_flags = (color_pass_flags | uint32_t(COLOR_PASS_FLAG_TRANSPARENT)) & ~uint32_t(COLOR_PASS_FLAG_SEPARATE_SPECULAR) & ~uint32_t(COLOR_PASS_FLAG_MOTION_VECTORS);
+		const RID depth_texture = rb->get_depth_texture();
+		const RD::DataFormat scene_color_format = rb->get_base_data_format();
+		// The engine-owned target is allocated at the scene's internal size (see get_compositor_layer_texture);
+		// a SEED_SOURCE_TEXTURE seed must match it exactly to be copy-compatible.
+		const Size2i layer_size = rb->get_internal_size();
+		RendererRD::TextureStorage *texture_storage = RendererRD::TextureStorage::get_singleton();
+
+		// The shared resolved scene depth must exist — this pass runs after the target stage's depth is
+		// resolved, so a null here is a renderer bug, not a user misconfiguration. Hard-fail naming the renderer.
+		ERR_FAIL_COND_MSG(depth_texture.is_null(), "RenderForwardClustered: compositor render-layer pass has no resolved scene depth texture; cannot occlude held-out members.");
+
+		// The render-pass uniform set for the held-out draw, and its draw label. Both are set up lazily on the
+		// first run that actually draws for this stage, so a stage with no matching layers costs nothing.
+		RID compositor_layer_rp_uniform_set;
+		bool began_label = false;
+
+		// Gather the effect-side layer declarations on this frame's compositor — the authoritative registration
+		// a held-out run is matched against below.
+		HashMap<ObjectID, RenderLayerDeclaration> declared_layers;
+		{
+			RendererCompositorStorage *comp_storage = RendererCompositorStorage::get_singleton();
+			const Vector<RID> layer_effects = comp_storage->compositor_get_compositor_effects(p_render_data->compositor, RSE::COMPOSITOR_EFFECT_CALLBACK_TYPE_ANY, true);
+			for (const RID &effect_rid : layer_effects) {
+				for (const RenderLayerDeclaration &decl : comp_storage->compositor_effect_get_render_layers(effect_rid)) {
+					declared_layers[decl.identity] = decl;
+				}
+			}
+		}
+
+		// Walk contiguous per-layer runs (sort_by_layer_order grouped the list by layer identity). Each
+		// run draws into its own engine-owned target.
+		uint32_t run_start = 0;
+		while (run_start < layer_element_count) {
+			const GeometryInstanceForwardClustered *run_owner = layer_list.elements[run_start]->owner;
+			const ObjectID run_layer = run_owner->render_layer.layer_id;
+			uint32_t run_end = run_start + 1;
+			while (run_end < layer_element_count && layer_list.elements[run_end]->owner->render_layer.layer_id == run_layer) {
+				run_end++;
+			}
+			const uint32_t run_size = run_end - run_start;
+
+			// No declaration ⇒ no consumer ⇒ no engine-owned target: the members are held out yet drawn
+			// nowhere, always a wiring mistake. The GeometryInstance3D config-warning catches this at edit
+			// time; this is the runtime backstop for setups it can't resolve (e.g. a runtime-supplied compositor).
+			const RenderLayerDeclaration *declaration = declared_layers.getptr(run_layer);
+			if (declaration == nullptr) {
+				ERR_PRINT_ONCE("RenderForwardClustered: a compositor render-layer member references a layer that no CompositorEffect declares; it will not be rendered. Add the CompositorRenderLayer to a CompositorEffect's render_layers.");
+				run_start = run_end;
+				continue;
+			}
+			// Refuse consume stages this renderer can't produce, naming the renderer — a registration error,
+			// not a silent skip. This fork draws the held-out target for POST_OPAQUE and POST_TRANSPARENT
+			// consumers (the two sides of the transparent pass); the other stages are reserved.
+			if (declaration->stage != RSE::COMPOSITOR_EFFECT_CALLBACK_TYPE_POST_OPAQUE && declaration->stage != RSE::COMPOSITOR_EFFECT_CALLBACK_TYPE_POST_TRANSPARENT) {
+				ERR_PRINT_ONCE("RenderForwardClustered: a CompositorRenderLayer declares a consume stage this renderer does not support; only POST_OPAQUE and POST_TRANSPARENT are available. Skipping the layer.");
+				run_start = run_end;
+				continue;
+			}
+			// This invocation draws only the layers whose consume stage matches; the other stage's invocation
+			// (the opposite side of the transparent pass) draws the rest, so each member is drawn exactly once.
+			if (declaration->stage != p_target_stage) {
+				run_start = run_end;
+				continue;
+			}
+
+			// Format + seed are read from the effect-side declaration (the single source of truth, resolved
+			// from the CompositorRenderLayer resource on the main thread). Members carry only identity + order;
+			// the render thread never dereferences the (main-thread-owned) resource — run_layer is an identity key.
+			const RD::DataFormat layer_format = _compositor_layer_rd_format(declaration->format, scene_color_format);
+			const RID layer_texture = rb->get_compositor_layer_texture(run_layer, layer_format);
+			if (layer_texture.is_null()) {
+				ERR_PRINT_ONCE("RenderForwardClustered: failed to allocate a compositor render-layer target; skipping the layer.");
+				run_start = run_end;
+				continue;
+			}
+
+			// Build the held-out uniform set from the target stage's environment UBO (lazily, see above).
+			if (compositor_layer_rp_uniform_set.is_null()) {
+				compositor_layer_rp_uniform_set = _setup_render_pass_uniform_set(RENDER_LIST_COMPOSITOR_LAYER, p_render_data, is_multiview, radiance_texture, samplers, p_env_uniform_buffer_index, true);
+				if (compositor_layer_rp_uniform_set.is_null()) {
+					// Without a uniform set nothing in this list can draw; stop rather than looping to no effect.
+					break;
+				}
+				RENDER_TIMESTAMP("Render Compositor Render-Layers");
+				RD::get_singleton()->draw_command_begin_label("Compositor Render-Layer held-out pass");
+				began_label = true;
+			}
+
+			const RID layer_framebuffer = FramebufferCacheRD::get_singleton()->get_cache_multiview(layer_view_count, layer_texture, depth_texture);
+
+			// Seed the engine-owned target before its members draw:
+			//   CLEAR   — clear the color to transparent as part of the members' draw list (below).
+			//   TEXTURE — copy the bound seed_texture into the target here, then LOAD it (so sub/mix members
+			//             read the seeded image in place). The RID is resolved at pass time, so a live texture works.
+			// A missing or mismatched TEXTURE falls back to CLEAR so members never draw over garbage.
+			bool seeded_from_texture = false;
+			if (declaration->seed_source == RenderLayerMembership::SEED_SOURCE_TEXTURE) {
+				const RID seed_rd = declaration->seed_texture.is_valid() ? texture_storage->texture_get_rd_texture(declaration->seed_texture) : RID();
+				if (seed_rd.is_null()) {
+					WARN_PRINT_ONCE("compositor_layer: SEED_SOURCE_TEXTURE layer has no valid seed_texture; seeding with CLEAR.");
+				} else {
+					const RD::TextureFormat seed_format = RD::get_singleton()->texture_get_format(seed_rd);
+					if (seed_format.format == layer_format && seed_format.width == (uint32_t)layer_size.width && seed_format.height == (uint32_t)layer_size.height && seed_format.array_layers >= layer_view_count) {
+						for (uint32_t v = 0; v < layer_view_count; v++) {
+							RD::get_singleton()->texture_copy(seed_rd, layer_texture, Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(layer_size.width, layer_size.height, 1), 0, 0, v, v);
+						}
+						seeded_from_texture = true;
+					} else {
+						WARN_PRINT_ONCE("compositor_layer: seed_texture format/size does not match the layer target; seeding with CLEAR.");
+					}
+				}
+			}
+
+			RenderListParameters render_list_params(layer_list.elements.ptr() + run_start, layer_list.element_info.ptr() + run_start, run_size, reverse_cull, PASS_MODE_COLOR, compositor_layer_color_pass_flags, rb_data.is_null(), p_render_data->directional_light_soft_shadows, compositor_layer_rp_uniform_set, get_debug_draw_mode() == RSE::VIEWPORT_DEBUG_DRAW_WIREFRAME, Vector2(), p_render_data->scene_data->lod_distance_multiplier, p_render_data->scene_data->screen_mesh_lod_threshold, layer_view_count, run_start, base_specialization);
+			if (seeded_from_texture) {
+				// Seed already copied into the target: LOAD both color (the seed) and the shared scene depth
+				// (depth-test on, depth-write off via the transparent pipeline).
+				_render_list_with_draw_list(&render_list_params, layer_framebuffer, RD::DRAW_DEFAULT_ALL, Vector<Color>(), 0.0f, 0u, p_render_data->render_region);
+			} else {
+				// CLEAR the layer color (transparent), LOAD the shared scene depth.
+				Vector<Color> clear_colors;
+				clear_colors.push_back(Color(0, 0, 0, 0));
+				_render_list_with_draw_list(&render_list_params, layer_framebuffer, RD::DRAW_CLEAR_COLOR_ALL, clear_colors, 0.0f, 0u, p_render_data->render_region);
+			}
+
+			// Record that this layer drew this frame, so the consuming callback reads this fresh target
+			// rather than an empty RID.
+			rb->mark_compositor_layer_rendered(run_layer);
+
+			run_start = run_end;
+		}
+
+		if (began_label) {
+			RD::get_singleton()->draw_command_end_label();
+		}
+	};
+
 	{
 		if (ce_post_opaque_resolved_color) {
 			for (uint32_t v = 0; v < rb->get_view_count(); v++) {
@@ -2405,6 +2610,15 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 			}
 		}
 
+		// Draw the POST_OPAQUE-stage held-out pass here — after any POST_OPAQUE consumer effect has run and before
+		// the transparent pass — so a consumer that composites the target into scene color places it under the
+		// engine's transparents, which then draw over it with normal alpha. Reuses the opaque environment UBO.
+		// Depth note: the pass occludes members against get_depth_texture(). MSAA-off (the supported scope) writes
+		// opaque depth there directly, so it is populated here. With MSAA, that buffer is only resolve-filled at
+		// this point when a POST_OPAQUE effect requested COMPOSITOR_EFFECT_FLAG_ACCESS_RESOLVED_DEPTH (see the
+		// ce_post_opaque_resolved_depth resolve above); the MSAA'd pre-resolve stage is deferred (see the ADR).
+		draw_compositor_render_layers(RSE::COMPOSITOR_EFFECT_CALLBACK_TYPE_POST_OPAQUE, opaque_pass_uniform_buffer_index);
+
 		RENDER_TIMESTAMP("Process Pre Transparent Compositor Effects");
 		_process_compositor_effects(RSE::COMPOSITOR_EFFECT_CALLBACK_TYPE_PRE_TRANSPARENT, p_render_data);
 	}
@@ -2453,6 +2667,11 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 		_copy_framebuffer_to_ss_effects(rb, using_ssil, using_ssr);
 	}
 	RD::get_singleton()->draw_command_end_label();
+
+	// Draw the POST_TRANSPARENT-stage held-out pass here — after the transparent resolve, before the
+	// POST_TRANSPARENT resolve effect — the v1 position, where the folded result is stamped over the
+	// transparent pass. Reuses the transparent environment UBO.
+	draw_compositor_render_layers(RSE::COMPOSITOR_EFFECT_CALLBACK_TYPE_POST_TRANSPARENT, transparent_pass_uniform_buffer_index);
 
 	{
 		RENDER_TIMESTAMP("Process Post Transparent Compositor Effects");

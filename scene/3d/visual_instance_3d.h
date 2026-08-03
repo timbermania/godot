@@ -33,6 +33,7 @@
 #include "scene/3d/node_3d.h"
 #include "servers/rendering/rendering_server_enums.h"
 
+class CompositorRenderLayer;
 class Material;
 class TriangleMesh;
 
@@ -135,6 +136,9 @@ private:
 
 	float lod_bias = 1.0;
 
+	Ref<CompositorRenderLayer> render_layer;
+	int render_layer_order = 0;
+
 	mutable HashMap<StringName, Variant> instance_shader_parameters;
 	mutable HashMap<StringName, StringName> instance_shader_parameter_property_remap;
 
@@ -145,6 +149,8 @@ private:
 	bool ignore_occlusion_culling = false;
 
 	const StringName *_instance_uniform_get_remap(const StringName &p_name) const;
+
+	void _update_render_layer();
 
 protected:
 	bool _set(const StringName &p_name, const Variant &p_value);
@@ -187,6 +193,12 @@ public:
 
 	void set_lod_bias(float p_bias);
 	float get_lod_bias() const;
+
+	void set_render_layer(const Ref<CompositorRenderLayer> &p_render_layer);
+	Ref<CompositorRenderLayer> get_render_layer() const;
+
+	void set_render_layer_order(int p_order);
+	int get_render_layer_order() const;
 
 	void set_gi_mode(GIMode p_mode);
 	GIMode get_gi_mode() const;
