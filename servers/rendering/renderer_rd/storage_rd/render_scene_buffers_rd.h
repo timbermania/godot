@@ -175,7 +175,7 @@ private:
 	// Per-frame render-thread signal: which compositor render-layer ids actually had a member drawn
 	// this frame. Set by the held-out pass (RenderForwardClustered) as each layer's run draws, reset at
 	// the top of each _render_scene. The layer targets in named_textures persist across frames, so this
-	// is the only per-frame "did this layer draw?" answer a POST_TRANSPARENT consumer can trust.
+	// is the only per-frame "did this layer draw?" answer a consumer (at either stage) can trust.
 	HashSet<uint64_t> compositor_layers_rendered_this_frame;
 
 	// Data buffers

@@ -2312,10 +2312,12 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 	// engine only LOADed into it), the engine here OWNS the target: it allocates on first access
 	// (get_compositor_layer_texture) and SEEDS it per the layer's seed_source.
 	//
-	// Parameterized by consume stage so the whole seed->blend->resolve bracket can sit on either side of the
-	// transparent pass: POST_OPAQUE layers draw before the transparent pass, so modern linear-alpha transparents
-	// layer *over* the folded PSX result (ADR-0080); POST_TRANSPARENT layers draw after the transparent resolve
-	// (v1 behavior). p_env_uniform_buffer_index selects the environment UBO the held-out draw reuses — the
+	// Parameterized by consume stage so the held-out draw can sit on either side of the transparent pass:
+	// POST_OPAQUE layers draw before the transparent pass, so a consuming effect that composites the target back
+	// places it under the engine's own transparents (which then layer over it with normal alpha); POST_TRANSPARENT
+	// layers draw after the transparent resolve (v1 behavior). Both are post-resolve (single-sample); the stage is
+	// an ordering knob, not a sample-count one — see docs/adr/0001-render-layer-honors-a-pre-transparent-consume-stage.md.
+	// p_env_uniform_buffer_index selects the environment UBO the held-out draw reuses — the
 	// opaque UBO at the POST_OPAQUE site, the transparent UBO at the POST_TRANSPARENT site — so each stage draws
 	// against the matching view/environment. The draw uses the shared resolved scene depth for occlusion with
 	// depth-write off (transparent pipeline), so scene depth is never corrupted.
@@ -2632,14 +2634,14 @@ void RenderForwardClustered::_render_scene(RenderDataRD *p_render_data, const Co
 			}
 		}
 
-		// Draw the POST_OPAQUE-stage held-out pass here — after its POST_OPAQUE seed effect (which authored the
-		// scratch above) and before the PRE_TRANSPARENT resolve effect and the transparent pass — so the folded
-		// result is composited into scene color before modern transparents draw over it (ADR-0080). Reuses the
-		// opaque environment UBO.
-		// Depth note: the pass occludes members against get_depth_texture(). MSAA-off (this fold's scope) writes
+		// Draw the POST_OPAQUE-stage held-out pass here — after any POST_OPAQUE consumer effect has run and before
+		// the transparent pass — so a consumer that composites the target into scene color places it under the
+		// engine's transparents, which then draw over it with normal alpha (see
+		// docs/adr/0001-render-layer-honors-a-pre-transparent-consume-stage.md). Reuses the opaque environment UBO.
+		// Depth note: the pass occludes members against get_depth_texture(). MSAA-off (the supported scope) writes
 		// opaque depth there directly, so it is populated here. With MSAA, that buffer is only resolve-filled at
 		// this point when a POST_OPAQUE effect requested COMPOSITOR_EFFECT_FLAG_ACCESS_RESOLVED_DEPTH (see the
-		// ce_post_opaque_resolved_depth resolve above); the MSAA'd earlier-stage path is deferred (ADR-0080).
+		// ce_post_opaque_resolved_depth resolve above); the MSAA'd pre-resolve stage is deferred (see the ADR).
 		draw_compositor_render_layers(RSE::COMPOSITOR_EFFECT_CALLBACK_TYPE_POST_OPAQUE, opaque_pass_uniform_buffer_index);
 
 		RENDER_TIMESTAMP("Process Pre Transparent Compositor Effects");

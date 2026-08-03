@@ -232,6 +232,11 @@ ordered transparency, WBOIT-later) through a smaller, honester interface. PSX-fo
 7. **Deferred vs interleaved stage — DECIDED: post-resolve is the default.** The layer is a post-resolve,
    pre-compositor-effect pass (full-frame pixels as context; occlusion + a future `SCENE_COLOR` seed both work); an earlier
    (pre-resolve) stage is opt-in only for clients that need MSAA'd layer geometry (§2.5). *(closed)*
+   **Fork update (2026-08-02):** this build additionally honors `POST_OPAQUE` — a *post-resolve* draw placed
+   *before* the transparent pass, so a consumer that composites the target back layers it under the engine's
+   own transparents. This is an **ordering** stage, distinct from and not a substitute for the reserved
+   *pre-resolve* MSAA stage above (it delivers no MSAA change). See
+   [docs/adr/0001-render-layer-honors-a-pre-transparent-consume-stage.md](adr/0001-render-layer-honors-a-pre-transparent-consume-stage.md).
 8. **Seed source — DECIDED: generalized via `seed_source`** (`CLEAR` | a bound `Texture` in v1; a resolved-`SCENE_COLOR`
    seed is a named future extension gated behind engine-written coverage, not shipped as an enum value), not hardcoded
    to "the main scene after opaque." This fixes the fork's placement bug (which broke mixing transparents between the

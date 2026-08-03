@@ -87,7 +87,8 @@ struct RenderLayerDeclaration {
 	// Seed texture's RenderingServer RID (resolved on the main thread); only meaningful when
 	// `seed_source == SEED_SOURCE_TEXTURE`. The pass resolves it to the current RD texture at draw time.
 	RID seed_texture;
-	// Pipeline stage the layer is consumed at (mirrors `CompositorEffect::EffectCallbackType`). v1 supports
-	// POST_TRANSPARENT only; other stages are refused at registration, naming the renderer.
+	// Pipeline stage the layer is consumed at (mirrors `CompositorEffect::EffectCallbackType`). Two stages are
+	// honored: POST_OPAQUE (before the transparent pass) and POST_TRANSPARENT (after the resolve); the rest are
+	// refused at registration, naming the renderer. See docs/adr/0001-render-layer-honors-a-pre-transparent-consume-stage.md.
 	RSE::CompositorEffectCallbackType stage = RSE::COMPOSITOR_EFFECT_CALLBACK_TYPE_POST_TRANSPARENT;
 };

@@ -55,9 +55,12 @@ TEST_CASE("[CompositorRenderLayer] Declarations round-trip through setters") {
 	layer->set_seed_source(CompositorRenderLayer::SEED_SOURCE_TEXTURE);
 	CHECK(layer->get_seed_source() == CompositorRenderLayer::SEED_SOURCE_TEXTURE);
 
-	// POST_TRANSPARENT is the only stage honored in this version; setting it round-trips.
+	// Both honored stages round-trip: POST_TRANSPARENT (the default) and POST_OPAQUE (pre-transparent).
 	layer->set_stage(CompositorEffect::EFFECT_CALLBACK_TYPE_POST_TRANSPARENT);
 	CHECK(layer->get_stage() == CompositorEffect::EFFECT_CALLBACK_TYPE_POST_TRANSPARENT);
+
+	layer->set_stage(CompositorEffect::EFFECT_CALLBACK_TYPE_POST_OPAQUE);
+	CHECK(layer->get_stage() == CompositorEffect::EFFECT_CALLBACK_TYPE_POST_OPAQUE);
 }
 
 TEST_CASE("[CompositorRenderLayer] Out-of-range declarations are rejected, leaving the value untouched") {
@@ -72,18 +75,20 @@ TEST_CASE("[CompositorRenderLayer] Out-of-range declarations are rejected, leavi
 	CHECK(layer->get_seed_source() == CompositorRenderLayer::SEED_SOURCE_CLEAR);
 }
 
-TEST_CASE("[CompositorRenderLayer] Unsupported earlier stages are rejected, leaving the stage at the honored default") {
-	// The held-out pass is drawn at a single fixed point (POST_TRANSPARENT) in this version; earlier
-	// stages are declared on the enum but not yet wired through, so set_stage rejects them rather than
-	// silently accepting a value the render path would ignore.
+TEST_CASE("[CompositorRenderLayer] Unsupported stages are rejected, leaving the stage untouched") {
+	// The held-out pass is drawn at one of two wired points (POST_OPAQUE, POST_TRANSPARENT); the remaining
+	// stages are declared on the enum but not wired through the render path, so set_stage rejects them rather
+	// than silently accepting a value the render path would ignore. Start from a known non-default honored
+	// value so a wrongly-accepted reject would be observable.
 	Ref<CompositorRenderLayer> layer = memnew(CompositorRenderLayer);
+	layer->set_stage(CompositorEffect::EFFECT_CALLBACK_TYPE_POST_OPAQUE);
 
 	ERR_PRINT_OFF;
-	layer->set_stage(CompositorEffect::EFFECT_CALLBACK_TYPE_POST_OPAQUE);
-	layer->set_stage(CompositorEffect::EFFECT_CALLBACK_TYPE_MAX);
+	layer->set_stage(CompositorEffect::EFFECT_CALLBACK_TYPE_PRE_TRANSPARENT); // reserved, in-range
+	layer->set_stage(CompositorEffect::EFFECT_CALLBACK_TYPE_MAX); // out of range
 	ERR_PRINT_ON;
 
-	CHECK(layer->get_stage() == CompositorEffect::EFFECT_CALLBACK_TYPE_POST_TRANSPARENT);
+	CHECK(layer->get_stage() == CompositorEffect::EFFECT_CALLBACK_TYPE_POST_OPAQUE);
 }
 
 TEST_CASE("[CompositorRenderLayer] Distinct instances carry distinct identities") {
