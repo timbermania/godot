@@ -1057,6 +1057,11 @@ public:
 	String get_current_rendering_driver_name() const;
 	String get_current_rendering_method() const;
 
+	// Capability gate for the compositor render-layer feature (held-out CompositorRenderLayer
+	// targets). Only the Forward+ method implements the held-out pass; consumers should
+	// feature-detect with has_method() first so scripts still load on stock builds.
+	bool is_compositor_layer_supported() const;
+
 #ifdef TOOLS_ENABLED
 	virtual void get_argument_options(const StringName &p_function, int p_idx, List<String> *r_options) const override;
 #endif
