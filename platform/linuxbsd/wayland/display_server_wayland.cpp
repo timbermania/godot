@@ -44,6 +44,9 @@
 #include "core/input/input_event.h"
 #include "core/os/main_loop.h"
 #include "core/os/os.h"
+
+#include <cstdio> // fopen, fread (raw /proc/self/cmdline scan)
+#include <cstring> // strcmp, strlen
 #include "servers/display/accessibility_server.h"
 #include "servers/display/native_menu.h"
 #include "servers/rendering/dummy/rasterizer_dummy.h"
@@ -86,6 +89,29 @@
 #define WAYLAND_MAX_FRAME_TIME_US (1'000'000)
 #define WINDOW_READY_TIMEOUT_MS (10'000)
 
+// Returns true if this process was spawned as an editor debug run (F5/F6), which the
+// editor launches with "--editor-pid" (see editor/run/editor_run.cpp). That argument is
+// consumed during CLI parsing and never reaches OS::get_cmdline_args(), so read the raw
+// kernel argv instead. A standalone run (e.g. agent-launched) carries no such argument.
+static bool _launched_from_editor() {
+	FILE *f = fopen("/proc/self/cmdline", "rb");
+	if (!f) {
+		return false;
+	}
+	char buf[65536];
+	size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+	fclose(f);
+	buf[n] = '\0';
+	for (size_t i = 0; i < n;) {
+		const char *tok = &buf[i];
+		if (strcmp(tok, "--editor-pid") == 0) {
+			return true;
+		}
+		i += strlen(tok) + 1;
+	}
+	return false;
+}
+
 String DisplayServerWayland::_get_app_id_from_context(DisplayServerEnums::Context p_context) {
 	String app_id;
 
@@ -100,11 +126,20 @@ String DisplayServerWayland::_get_app_id_from_context(DisplayServerEnums::Contex
 
 		case DisplayServerEnums::CONTEXT_ENGINE:
 		default: {
-			String config_name = GLOBAL_GET("application/config/name");
-			if (config_name.length() != 0) {
-				app_id = config_name;
+			// A standalone game run (launched directly, not as an editor F5/F6 debug
+			// child) gets a fixed app_id so a compositor rule can route it to a
+			// dedicated workspace. Editor debug children carry "--editor-pid" and keep
+			// the project name so they stay alongside the editor. See docs/adr/0001.
+			static const bool from_editor = _launched_from_editor();
+			if (!from_editor) {
+				app_id = "godot-standalone";
 			} else {
-				app_id = "org.godotengine.Godot";
+				String config_name = GLOBAL_GET("application/config/name");
+				if (config_name.length() != 0) {
+					app_id = config_name;
+				} else {
+					app_id = "org.godotengine.Godot";
+				}
 			}
 		}
 	}

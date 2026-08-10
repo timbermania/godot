@@ -103,6 +103,7 @@
 //#include <unistd.h>
 #include <climits> // LONG_MAX
 #include <cstdio> // stderr
+#include <cstring> // strcmp, strlen (raw /proc/self/cmdline scan)
 #include <cstdlib> // getenv
 
 // ICCCM
@@ -5772,6 +5773,29 @@ void DisplayServerX11::swap_buffers() {
 #endif
 }
 
+// Returns true if this process was spawned as an editor debug run (F5/F6), which the
+// editor launches with "--editor-pid" (see editor/run/editor_run.cpp). That argument is
+// consumed during CLI parsing and never reaches OS::get_cmdline_args(), so read the raw
+// kernel argv instead. A standalone run (e.g. agent-launched) carries no such argument.
+static bool _launched_from_editor() {
+	FILE *f = fopen("/proc/self/cmdline", "rb");
+	if (!f) {
+		return false;
+	}
+	char buf[65536];
+	size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+	fclose(f);
+	buf[n] = '\0';
+	for (size_t i = 0; i < n;) {
+		const char *tok = &buf[i];
+		if (strcmp(tok, "--editor-pid") == 0) {
+			return true;
+		}
+		i += strlen(tok) + 1;
+	}
+	return false;
+}
+
 void DisplayServerX11::_update_context(WindowData &wd) {
 	XClassHint *classHint = XAllocClassHint();
 
@@ -5791,11 +5815,20 @@ void DisplayServerX11::_update_context(WindowData &wd) {
 
 		CharString class_str;
 		if (context == DisplayServerEnums::CONTEXT_ENGINE) {
-			String config_name = GLOBAL_GET("application/config/name");
-			if (config_name.length() == 0) {
-				class_str = "Godot_Engine";
+			// A standalone game run (launched directly, not as an editor F5/F6 debug
+			// child) gets a fixed window class so a window-manager rule can route it to
+			// a dedicated workspace. Editor debug children carry "--editor-pid" and keep
+			// the project name so they stay alongside the editor. See docs/adr/0001.
+			static const bool from_editor = _launched_from_editor();
+			if (!from_editor) {
+				class_str = "godot-standalone";
 			} else {
-				class_str = config_name.utf8();
+				String config_name = GLOBAL_GET("application/config/name");
+				if (config_name.length() == 0) {
+					class_str = "Godot_Engine";
+				} else {
+					class_str = config_name.utf8();
+				}
 			}
 		} else {
 			class_str = "Godot";
