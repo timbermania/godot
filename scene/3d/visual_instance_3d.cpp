@@ -35,7 +35,10 @@ STATIC_ASSERT_INCOMPLETE_TYPE(class, RenderingServer);
 #include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
 #include "core/os/os.h"
+#include "scene/3d/camera_3d.h"
+#include "scene/3d/world_environment.h"
 #include "scene/main/scene_tree.h"
+#include "scene/resources/compositor_render_layer.h"
 #include "scene/resources/material.h"
 #include "servers/rendering/rendering_server.h"
 
@@ -400,6 +403,51 @@ float GeometryInstance3D::get_lod_bias() const {
 	return lod_bias;
 }
 
+// Push the current membership down to the RenderingServer. A member carries only its layer identity and
+// caller-order key; the layer's format/seed_source/seed_texture live on the effect-side declaration (the
+// single source of truth — see CompositorEffect), so this never resolves them and the render thread never
+// dereferences the resource. `render_layer_order` is the instance's own property, so this re-pushes when it
+// changes; the layer's *contents* changing is the effect's concern, not the instance's.
+void GeometryInstance3D::_update_render_layer() {
+	RenderLayerMembership membership;
+	if (render_layer.is_valid()) {
+		membership.layer_id = render_layer->get_instance_id();
+		membership.order = render_layer_order;
+	}
+	RS::get_singleton()->instance_geometry_set_render_layer(get_instance(), membership);
+}
+
+void GeometryInstance3D::set_render_layer(const Ref<CompositorRenderLayer> &p_render_layer) {
+	if (render_layer == p_render_layer) {
+		return;
+	}
+	bool was_valid = render_layer.is_valid();
+	render_layer = p_render_layer;
+	_update_render_layer();
+	if (was_valid != render_layer.is_valid()) {
+		// Membership toggled: show/hide the render_layer_order field in the inspector.
+		notify_property_list_changed();
+	}
+	// The undeclared-layer config warning depends on which layer is referenced; refresh it now.
+	update_configuration_warnings();
+}
+
+Ref<CompositorRenderLayer> GeometryInstance3D::get_render_layer() const {
+	return render_layer;
+}
+
+void GeometryInstance3D::set_render_layer_order(int p_order) {
+	if (render_layer_order == p_order) {
+		return;
+	}
+	render_layer_order = p_order;
+	_update_render_layer();
+}
+
+int GeometryInstance3D::get_render_layer_order() const {
+	return render_layer_order;
+}
+
 void GeometryInstance3D::set_instance_shader_parameter(const StringName &p_name, const Variant &p_value) {
 	if (p_value.get_type() == Variant::NIL) {
 		Variant def_value = RS::get_singleton()->instance_geometry_get_shader_parameter_default_value(get_instance(), p_name);
@@ -513,8 +561,68 @@ Ref<TriangleMesh> GeometryInstance3D::generate_triangle_mesh() const {
 	return Ref<TriangleMesh>();
 }
 
+// Does `p_compositor` carry a CompositorEffect that declares `p_layer`? Records whether any compositor was
+// seen at all, so the caller can distinguish "declared elsewhere / no compositor here" (stay quiet) from
+// "a compositor is present but nothing declares this layer" (warn).
+static void _compositor_declares_layer(const Ref<Compositor> &p_compositor, const Ref<CompositorRenderLayer> &p_layer, bool &r_any_compositor, bool &r_declared) {
+	if (p_compositor.is_null()) {
+		return;
+	}
+	r_any_compositor = true;
+	const TypedArray<CompositorEffect> effects = p_compositor->get_compositor_effects();
+	for (int i = 0; i < effects.size(); i++) {
+		const Ref<CompositorEffect> effect = effects[i];
+		if (effect.is_null()) {
+			continue;
+		}
+		const TypedArray<CompositorRenderLayer> layers = effect->get_render_layers();
+		for (int j = 0; j < layers.size(); j++) {
+			const Ref<CompositorRenderLayer> declared = layers[j];
+			if (declared == p_layer) {
+				r_declared = true;
+				return;
+			}
+		}
+	}
+}
+
+// Best-effort scan of the edited scene for a CompositorEffect declaring `p_layer`. A compositor reaches the
+// renderer from a WorldEnvironment or a Camera3D, so both node types are inspected. This can't see a compositor
+// supplied by a parent/instancing scene or set from script, so the caller only warns when a compositor IS
+// present here yet does not declare the layer — never on an unresolvable setup (the render-time backstop in
+// RenderForwardClustered covers what this can't).
+static void _scan_tree_for_declared_layer(const Node *p_node, const Ref<CompositorRenderLayer> &p_layer, bool &r_any_compositor, bool &r_declared) {
+	if (const WorldEnvironment *world_environment = Object::cast_to<WorldEnvironment>(p_node)) {
+		_compositor_declares_layer(world_environment->get_compositor(), p_layer, r_any_compositor, r_declared);
+	} else if (const Camera3D *camera = Object::cast_to<Camera3D>(p_node)) {
+		_compositor_declares_layer(camera->get_compositor(), p_layer, r_any_compositor, r_declared);
+	}
+	if (r_declared) {
+		return;
+	}
+	for (int i = 0; i < p_node->get_child_count(); i++) {
+		_scan_tree_for_declared_layer(p_node->get_child(i), p_layer, r_any_compositor, r_declared);
+		if (r_declared) {
+			return;
+		}
+	}
+}
+
 PackedStringArray GeometryInstance3D::get_configuration_warnings() const {
 	PackedStringArray warnings = VisualInstance3D::get_configuration_warnings();
+
+	if (render_layer.is_valid()) {
+		const SceneTree *tree = get_tree();
+		Node *scene_root = tree != nullptr ? tree->get_edited_scene_root() : nullptr;
+		if (scene_root != nullptr) {
+			bool any_compositor = false;
+			bool declared = false;
+			_scan_tree_for_declared_layer(scene_root, render_layer, any_compositor, declared);
+			if (any_compositor && !declared) {
+				warnings.push_back(RTR("This node's Render Layer is not declared by any CompositorEffect in the scene's Compositor.\nHeld-out geometry whose layer no effect declares is drawn nowhere. Add this CompositorRenderLayer to a CompositorEffect's Render Layers (on a WorldEnvironment or Camera3D) so it is composited back."));
+			}
+		}
+	}
 
 	if (!Math::is_zero_approx(visibility_range_end) && visibility_range_end <= visibility_range_begin) {
 		warnings.push_back(RTR("The GeometryInstance3D visibility range's End distance is set to a non-zero value, but is lower than the Begin distance.\nThis means the GeometryInstance3D will never be visible.\nTo resolve this, set the End distance to 0 or to a value greater than the Begin distance."));
@@ -542,6 +650,11 @@ PackedStringArray GeometryInstance3D::get_configuration_warnings() const {
 void GeometryInstance3D::_validate_property(PropertyInfo &p_property) const {
 	if (p_property.name == "sorting_offset" || p_property.name == "sorting_use_aabb_center") {
 		p_property.usage = PROPERTY_USAGE_DEFAULT;
+	}
+	if (p_property.name == "render_layer_order" && render_layer.is_null()) {
+		// The caller-order key is only meaningful once the instance is a compositor
+		// render-layer member; keep it stored but hide it from the inspector otherwise.
+		p_property.usage = PROPERTY_USAGE_NO_EDITOR;
 	}
 }
 
@@ -582,6 +695,11 @@ void GeometryInstance3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_extra_cull_margin", "margin"), &GeometryInstance3D::set_extra_cull_margin);
 	ClassDB::bind_method(D_METHOD("get_extra_cull_margin"), &GeometryInstance3D::get_extra_cull_margin);
 
+	ClassDB::bind_method(D_METHOD("set_render_layer", "render_layer"), &GeometryInstance3D::set_render_layer);
+	ClassDB::bind_method(D_METHOD("get_render_layer"), &GeometryInstance3D::get_render_layer);
+	ClassDB::bind_method(D_METHOD("set_render_layer_order", "order"), &GeometryInstance3D::set_render_layer_order);
+	ClassDB::bind_method(D_METHOD("get_render_layer_order"), &GeometryInstance3D::get_render_layer_order);
+
 	ClassDB::bind_method(D_METHOD("set_lightmap_texel_scale", "scale"), &GeometryInstance3D::set_lightmap_texel_scale);
 	ClassDB::bind_method(D_METHOD("get_lightmap_texel_scale"), &GeometryInstance3D::get_lightmap_texel_scale);
 
@@ -610,6 +728,8 @@ void GeometryInstance3D::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::AABB, "custom_aabb", PROPERTY_HINT_NONE, "suffix:m"), "set_custom_aabb", "get_custom_aabb");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_bias", PROPERTY_HINT_RANGE, "0.001,128,0.001"), "set_lod_bias", "get_lod_bias");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "ignore_occlusion_culling"), "set_ignore_occlusion_culling", "is_ignoring_occlusion_culling");
+	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "render_layer", PROPERTY_HINT_RESOURCE_TYPE, "CompositorRenderLayer"), "set_render_layer", "get_render_layer");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "render_layer_order"), "set_render_layer_order", "get_render_layer_order");
 
 	ADD_GROUP("Global Illumination", "gi_");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "gi_mode", PROPERTY_HINT_ENUM, "Disabled,Static,Dynamic"), "set_gi_mode", "get_gi_mode");

@@ -475,6 +475,11 @@ public:
 		float sorting_offset = 0.0;
 		bool use_aabb_center = true;
 
+		// Compositor render-layer membership pushed down from the member's CompositorRenderLayer resource on
+		// the main thread (see GeometryInstance3D::_update_render_layer). Stored so it survives
+		// geometry_instance rebuilds; `render_layer.is_member()` is false when not a member.
+		RenderLayerMembership render_layer;
+
 		Vector<Color> lightmap_target_sh; //target is used for incrementally changing the SH over time, this avoids pops in some corner cases and when going interior <-> exterior
 
 		uint64_t last_frame_pass;
@@ -1030,6 +1035,7 @@ public:
 	virtual void instance_set_surface_override_material(RID p_instance, int p_surface, RID p_material);
 	virtual void instance_set_visible(RID p_instance, bool p_visible);
 	virtual void instance_geometry_set_transparency(RID p_instance, float p_transparency);
+	virtual void instance_geometry_set_render_layer(RID p_instance, const RenderLayerMembership &p_membership);
 
 	virtual void instance_teleport(RID p_instance);
 
@@ -1197,6 +1203,7 @@ public:
 	PASS2(compositor_effect_set_enabled, RID, bool)
 	PASS3(compositor_effect_set_callback, RID, RSE::CompositorEffectCallbackType, const Callable &)
 	PASS3(compositor_effect_set_flag, RID, RSE::CompositorEffectFlags, bool)
+	PASS2(compositor_effect_set_render_layers, RID, const Vector<RenderLayerDeclaration> &)
 
 	// Compositor
 

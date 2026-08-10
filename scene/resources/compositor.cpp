@@ -30,9 +30,24 @@
 
 #include "compositor.h"
 
+#include "core/core_string_names.h"
 #include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
+#include "core/templates/hash_set.h"
+#include "scene/resources/compositor_render_layer.h"
 #include "servers/rendering/rendering_server.h"
+
+// RenderLayerMembership/RenderLayerDeclaration (render-server side) mirror CompositorRenderLayer's
+// Format/SeedSource enums to avoid a scene->server header dependency. This TU sees both — and is where
+// `render_layers` is resolved to a RenderLayerDeclaration — so it is the single place that guarantees the
+// mirror never drifts: if either enum changes, one of these fails to compile.
+static_assert((int)RenderLayerMembership::FORMAT_INHERIT_SCENE_COLOR == (int)CompositorRenderLayer::FORMAT_INHERIT_SCENE_COLOR);
+static_assert((int)RenderLayerMembership::FORMAT_RGBA8 == (int)CompositorRenderLayer::FORMAT_RGBA8);
+static_assert((int)RenderLayerMembership::FORMAT_RGBA16F == (int)CompositorRenderLayer::FORMAT_RGBA16F);
+static_assert((int)RenderLayerMembership::FORMAT_MAX == (int)CompositorRenderLayer::FORMAT_MAX);
+static_assert((int)RenderLayerMembership::SEED_SOURCE_CLEAR == (int)CompositorRenderLayer::SEED_SOURCE_CLEAR);
+static_assert((int)RenderLayerMembership::SEED_SOURCE_TEXTURE == (int)CompositorRenderLayer::SEED_SOURCE_TEXTURE);
+static_assert((int)RenderLayerMembership::SEED_SOURCE_MAX == (int)CompositorRenderLayer::SEED_SOURCE_MAX);
 
 /* Compositor Effect */
 
@@ -65,6 +80,12 @@ void CompositorEffect::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_needs_separate_specular"), &CompositorEffect::get_needs_separate_specular);
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "needs_separate_specular"), "set_needs_separate_specular", "get_needs_separate_specular");
 
+	ClassDB::bind_method(D_METHOD("set_render_layers", "render_layers"), &CompositorEffect::set_render_layers);
+	ClassDB::bind_method(D_METHOD("get_render_layers"), &CompositorEffect::get_render_layers);
+	ADD_PROPERTY(PropertyInfo(Variant::ARRAY, "render_layers", PROPERTY_HINT_ARRAY_TYPE, MAKE_RESOURCE_TYPE_HINT("CompositorRenderLayer")), "set_render_layers", "get_render_layers");
+
+	ClassDB::bind_method(D_METHOD("get_layer_texture", "render_layer"), &CompositorEffect::get_layer_texture);
+
 	BIND_ENUM_CONSTANT(EFFECT_CALLBACK_TYPE_PRE_OPAQUE)
 	BIND_ENUM_CONSTANT(EFFECT_CALLBACK_TYPE_POST_OPAQUE)
 	BIND_ENUM_CONSTANT(EFFECT_CALLBACK_TYPE_POST_SKY)
@@ -92,7 +113,11 @@ void CompositorEffect::_validate_property(PropertyInfo &p_property) const {
 }
 
 void CompositorEffect::_call_render_callback(int p_effect_callback_type, const RenderData *p_render_data) {
+	// Expose the current frame's render data to get_layer_texture() for the duration of the
+	// callback only (render thread, non-reentrant), so consumers never cache a stale pointer.
+	current_render_data = p_render_data;
 	GDVIRTUAL_CALL(_render_callback, p_effect_callback_type, p_render_data);
+	current_render_data = nullptr;
 }
 
 void CompositorEffect::set_enabled(bool p_enabled) {
@@ -186,6 +211,90 @@ void CompositorEffect::set_needs_separate_specular(bool p_enabled) {
 
 bool CompositorEffect::get_needs_separate_specular() const {
 	return needs_separate_specular;
+}
+
+void CompositorEffect::set_render_layers(const TypedArray<CompositorRenderLayer> &p_render_layers) {
+	// Reconnect the per-layer `changed` listeners across the swap so a declared layer's format/seed/stage
+	// edits re-push the declaration live (the declaration is the single source of truth the renderer keys
+	// each layer's target from). Disconnect the layers leaving the set; connect the ones joining it.
+	for (int i = 0; i < render_layers.size(); i++) {
+		const Ref<CompositorRenderLayer> old_layer = render_layers[i];
+		if (old_layer.is_valid() && old_layer->is_connected(CoreStringName(changed), callable_mp(this, &CompositorEffect::_update_render_layers))) {
+			old_layer->disconnect(CoreStringName(changed), callable_mp(this, &CompositorEffect::_update_render_layers));
+		}
+	}
+
+	render_layers = p_render_layers;
+
+	for (int i = 0; i < render_layers.size(); i++) {
+		const Ref<CompositorRenderLayer> layer = render_layers[i];
+		if (layer.is_valid() && !layer->is_connected(CoreStringName(changed), callable_mp(this, &CompositorEffect::_update_render_layers))) {
+			layer->connect(CoreStringName(changed), callable_mp(this, &CompositorEffect::_update_render_layers));
+		}
+	}
+
+	_update_render_layers();
+}
+
+void CompositorEffect::_update_render_layers() {
+	// Resolve + validate the declaration at registration: a layer's identity (its object id) is the key its
+	// members reference and the engine derives the target's NTKey from, so declaring the same layer more than
+	// once is an ambiguous double-declaration. Diagnose it here — at edit time — rather than silently at render
+	// time; the duplicate is dropped from the pushed set. Null entries are tolerated as empty inspector slots
+	// (as `set_compositor_effects` does). The resolved RenderLayerDeclaration list is the authoritative record
+	// the render backend validates and keys each layer's target from; the render thread never dereferences the
+	// (main-thread-owned) resource.
+	Vector<RenderLayerDeclaration> declarations;
+	HashSet<ObjectID> seen_identities;
+	for (int i = 0; i < render_layers.size(); i++) {
+		const Ref<CompositorRenderLayer> layer = render_layers[i];
+		if (layer.is_null()) {
+			continue;
+		}
+		const ObjectID identity = layer->get_instance_id();
+		if (seen_identities.has(identity)) {
+			ERR_PRINT(vformat("CompositorEffect: the same CompositorRenderLayer is declared more than once in 'render_layers' (entry %d). Each layer must be declared by at most one entry; the duplicate is ignored.", i));
+			continue;
+		}
+		seen_identities.insert(identity);
+
+		RenderLayerDeclaration declaration;
+		declaration.identity = identity;
+		declaration.format = (RenderLayerMembership::Format)layer->get_format();
+		declaration.seed_source = (RenderLayerMembership::SeedSource)layer->get_seed_source();
+		declaration.stage = RSE::CompositorEffectCallbackType(layer->get_stage());
+		const Ref<Texture2D> seed_tex = layer->get_seed_texture();
+		if (seed_tex.is_valid()) {
+			declaration.seed_texture = seed_tex->get_rid();
+		}
+		declarations.push_back(declaration);
+	}
+
+	// Push the resolved declaration to the render backend (registration). Guarded on `rid` because the
+	// RenderingServer may not exist yet during headless/tooling resource loads (mirrors the other setters).
+	if (rid.is_valid()) {
+		RenderingServer *rs = RenderingServer::get_singleton();
+		ERR_FAIL_NULL(rs);
+		rs->compositor_effect_set_render_layers(rid, declarations);
+	}
+}
+
+TypedArray<CompositorRenderLayer> CompositorEffect::get_render_layers() const {
+	return render_layers;
+}
+
+RID CompositorEffect::get_layer_texture(const Ref<CompositorRenderLayer> &p_render_layer) const {
+	ERR_FAIL_NULL_V_MSG(current_render_data, RID(), "get_layer_texture() may only be called from within _render_callback().");
+	ERR_FAIL_COND_V_MSG(p_render_layer.is_null(), RID(), "Cannot resolve a layer texture for a null CompositorRenderLayer.");
+
+	Ref<RenderSceneBuffers> rb = current_render_data->get_render_scene_buffers();
+	ERR_FAIL_COND_V(rb.is_null(), RID());
+
+	// Keyed by the layer resource's own object id — the same identity the members reference.
+	// Resolution is by identity only; membership in `render_layers` is intentionally NOT validated here
+	// (that property is a declarative editor hint, never pushed to the RenderingServer — see its docs).
+	// A per-frame render-thread WARN on non-membership would spam and gate legitimate uses, so it's advisory.
+	return rb->get_compositor_layer_texture(p_render_layer->get_instance_id());
 }
 
 CompositorEffect::CompositorEffect() {

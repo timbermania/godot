@@ -826,6 +826,7 @@ public:
 	FUNC2(compositor_effect_set_enabled, RID, bool)
 	FUNC3(compositor_effect_set_callback, RID, RSE::CompositorEffectCallbackType, const Callable &)
 	FUNC3(compositor_effect_set_flag, RID, RSE::CompositorEffectFlags, bool)
+	FUNC2(compositor_effect_set_render_layers, RID, const Vector<RenderLayerDeclaration> &)
 
 	/* COMPOSITOR */
 
@@ -974,6 +975,7 @@ public:
 	FUNC4(instance_geometry_set_lightmap, RID, RID, const Rect2 &, int)
 	FUNC2(instance_geometry_set_lod_bias, RID, float)
 	FUNC2(instance_geometry_set_transparency, RID, float)
+	FUNC2(instance_geometry_set_render_layer, RID, const RenderLayerMembership &)
 	FUNC3(instance_geometry_set_shader_parameter, RID, const StringName &, const Variant &)
 	FUNC2RC(Variant, instance_geometry_get_shader_parameter, RID, const StringName &)
 	FUNC2RC(Variant, instance_geometry_get_shader_parameter_default_value, RID, const StringName &)

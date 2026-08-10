@@ -74,6 +74,7 @@ void SceneShaderForwardMobile::ShaderData::set_code(const String &p_code) {
 	uses_normal_map = false;
 	uses_bent_normal_map = false;
 	wireframe = false;
+	compositor_layer = false;
 
 	unshaded = false;
 	uses_vertex = false;
@@ -118,6 +119,11 @@ void SceneShaderForwardMobile::ShaderData::set_code(const String &p_code) {
 	actions.render_mode_values["cull_back"] = Pair<int *, int>(&cull_mode, RSE::CULL_MODE_BACK);
 
 	actions.render_mode_flags["unshaded"] = &unshaded;
+	// `compositor_layer` is registered globally in shader_types (so it parses on every renderer), but the
+	// compositor render-layer pass that consumes it exists only in Forward+ (clustered). Bind the flag here
+	// purely so Mobile can DETECT and warn about it below — Mobile has no such pass, so a flagged material
+	// would otherwise silently fall into the normal pass and blend incorrectly (see the WARN below).
+	actions.render_mode_flags["compositor_layer"] = &compositor_layer;
 	actions.render_mode_flags["wireframe"] = &wireframe;
 	actions.render_mode_flags["particle_trails"] = &uses_particle_trails;
 	actions.render_mode_flags["world_vertex_coords"] = &uses_world_coordinates;
@@ -182,6 +188,15 @@ void SceneShaderForwardMobile::ShaderData::set_code(const String &p_code) {
 
 	if (version.is_null()) {
 		version = SceneShaderForwardMobile::singleton->shader.version_create(false);
+	}
+
+	if (compositor_layer) {
+		// The compositor render-layer pass only exists in the Forward+ (clustered) renderer. On Mobile there
+		// is no such list, so the flag cannot be honored. This is a genuinely unsupported config (not a
+		// recoverable warning): hard-fail naming the renderer rather than silently rendering the member
+		// through the normal pass with wrong blending. This is the Mobile-side half of the "Forward+ only"
+		// invariant; the Forward+ renderer is the one that implements the held-out pass.
+		ERR_PRINT_ONCE("compositor_layer render_mode is not supported on the Mobile renderer (Forward+ only). The flagged material cannot be composited; use the Forward+ rendering method.");
 	}
 
 	depth_draw = DepthDraw(depth_drawi);

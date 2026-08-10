@@ -37,6 +37,7 @@
 #include "servers/rendering/renderer_rd/effects/motion_vectors_store.h"
 #include "servers/rendering/renderer_rd/effects/ss_effects.h"
 #include "servers/rendering/renderer_rd/effects/taa.h"
+#include "servers/rendering/renderer_rd/forward_clustered/compositor_layer_order_sort.h"
 #include "servers/rendering/renderer_rd/forward_clustered/scene_shader_forward_clustered.h"
 #include "servers/rendering/renderer_rd/renderer_scene_render_rd.h"
 #include "servers/rendering/renderer_rd/shaders/forward_clustered/best_fit_normal.glsl.gen.h"
@@ -80,6 +81,7 @@ class RenderForwardClustered : public RendererSceneRenderRD {
 		RENDER_LIST_MOTION, //used for opaque objects with motion
 		RENDER_LIST_ALPHA, //used for transparent objects
 		RENDER_LIST_SECONDARY, //used for shadows and other objects
+		RENDER_LIST_COMPOSITOR_LAYER, //members of `render_mode compositor_layer` with a valid render_layer, drawn into an engine-owned target a CompositorEffect consumes
 		RENDER_LIST_MAX
 	};
 
@@ -406,7 +408,7 @@ private:
 		uint32_t max_lightmaps;
 		RID lightmap_buffer;
 
-		MultiUmaBuffer<1u> instance_buffer[RENDER_LIST_MAX] = { MultiUmaBuffer<1u>("RENDER_LIST_OPAQUE"), MultiUmaBuffer<1u>("RENDER_LIST_MOTION"), MultiUmaBuffer<1u>("RENDER_LIST_ALPHA"), MultiUmaBuffer<1u>("RENDER_LIST_SECONDARY") };
+		MultiUmaBuffer<1u> instance_buffer[RENDER_LIST_MAX] = { MultiUmaBuffer<1u>("RENDER_LIST_OPAQUE"), MultiUmaBuffer<1u>("RENDER_LIST_MOTION"), MultiUmaBuffer<1u>("RENDER_LIST_ALPHA"), MultiUmaBuffer<1u>("RENDER_LIST_SECONDARY"), MultiUmaBuffer<1u>("RENDER_LIST_COMPOSITOR_LAYER") };
 		InstanceData *curr_gpu_ptr[RENDER_LIST_MAX] = {};
 
 		LightmapCaptureData *lightmap_captures = nullptr;
@@ -729,6 +731,52 @@ private:
 
 			SortArray<GeometryInstanceSurfaceDataCache *, SortByReverseDepthAndPriority> sorter;
 			sorter.sort(elements.ptr(), elements.size());
+		}
+
+		// Compound comparator for the compositor render-layer list: primary key = the member's
+		// layer identity (its CompositorRenderLayer object id), so every layer's members end up
+		// contiguous and the held-out pass can draw each layer as one element range; secondary key
+		// = the caller order (ascending `render_layer_order`); ties broken by submission index for a
+		// deterministic, stable-equivalent result. The secondary rule delegates to
+		// `compositor_layer_order_less` in compositor_layer_order_sort.h, so the unit-tested rule
+		// (compute_order) IS the one shipped here; the order key is a pure CPU-side sort input, never
+		// uploaded to the GPU.
+		struct SortByLayerThenOrder {
+			GeometryInstanceSurfaceDataCache *const *elements = nullptr;
+			_FORCE_INLINE_ bool operator()(uint32_t a, uint32_t b) const {
+				const GeometryInstanceForwardClustered *ia = elements[a]->owner;
+				const GeometryInstanceForwardClustered *ib = elements[b]->owner;
+				const uint64_t la = ia->render_layer.layer_id;
+				const uint64_t lb = ib->render_layer.layer_id;
+				if (la != lb) {
+					return la < lb;
+				}
+				return compositor_layer_order_less(ia->render_layer.order, a, ib->render_layer.order, b);
+			}
+		};
+
+		// Groups this list by compositor render-layer identity (contiguous per-layer runs) and, within
+		// each layer, applies the caller order. See SortByLayerThenOrder.
+		void sort_by_layer_order() {
+			const uint32_t size = elements.size();
+			if (size < 2) {
+				return;
+			}
+			LocalVector<uint32_t> perm;
+			perm.resize(size);
+			SortByLayerThenOrder comparator;
+			comparator.elements = elements.ptr();
+			// Same identity-perm + stable-sort dance as the unit-tested compute_order(); only the
+			// comparator differs (compound layer-then-order here vs. bare order key there).
+			compute_index_permutation(perm.ptr(), size, comparator);
+			LocalVector<GeometryInstanceSurfaceDataCache *> sorted;
+			sorted.resize(size);
+			for (uint32_t i = 0; i < size; i++) {
+				sorted[i] = elements[perm[i]];
+			}
+			for (uint32_t i = 0; i < size; i++) {
+				elements[i] = sorted[i];
+			}
 		}
 
 		_FORCE_INLINE_ void add_element(GeometryInstanceSurfaceDataCache *p_element) {

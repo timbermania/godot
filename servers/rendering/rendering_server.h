@@ -35,6 +35,7 @@
 #include "core/variant/typed_array.h"
 #include "core/variant/variant.h"
 #include "servers/display/display_server_enums.h"
+#include "servers/rendering/render_layer_membership.h"
 #include "servers/rendering/rendering_device_enums.h"
 #include "servers/rendering/rendering_server_enums.h"
 #include "servers/rendering/rendering_server_types.h"
@@ -638,6 +639,11 @@ public:
 	virtual void compositor_effect_set_enabled(RID p_effect, bool p_enabled) = 0;
 	virtual void compositor_effect_set_callback(RID p_effect, RSE::CompositorEffectCallbackType p_callback_type, const Callable &p_callback) = 0;
 	virtual void compositor_effect_set_flag(RID p_effect, RSE::CompositorEffectFlags p_flag, bool p_set) = 0;
+	// Declares which compositor render layers this effect owns. Pushed from `CompositorEffect::set_render_layers`
+	// on the main thread (each `CompositorRenderLayer` resolved to a plain `RenderLayerDeclaration`); this is the
+	// authoritative registration the renderer validates and keys each layer's target from. Not script-bound —
+	// the declaration list is engine-internal (see `CompositorEffect` for the exposed `render_layers` property).
+	virtual void compositor_effect_set_render_layers(RID p_effect, const Vector<RenderLayerDeclaration> &p_render_layers) = 0;
 
 	/* COMPOSITOR API */
 
@@ -768,6 +774,11 @@ public:
 	virtual void instance_geometry_set_lightmap(RID p_instance, RID p_lightmap, const Rect2 &p_lightmap_uv_scale, int p_lightmap_slice) = 0;
 	virtual void instance_geometry_set_lod_bias(RID p_instance, float p_lod_bias) = 0;
 	virtual void instance_geometry_set_transparency(RID p_instance, float p_transparency) = 0;
+	// Compositor render-layer membership. `p_membership` carries the member's layer identity + caller-order key
+	// only; the layer's format/seed live on the effect-side RenderLayerDeclaration (the single source of truth).
+	// Resolved on the main thread, so the render thread never dereferences the (main-thread-owned) resource.
+	// See RenderForwardClustered's held-out pass.
+	virtual void instance_geometry_set_render_layer(RID p_instance, const RenderLayerMembership &p_membership) = 0;
 
 	virtual void instance_geometry_set_shader_parameter(RID p_instance, const StringName &, const Variant &p_value) = 0;
 	virtual Variant instance_geometry_get_shader_parameter(RID p_instance, const StringName &) const = 0;

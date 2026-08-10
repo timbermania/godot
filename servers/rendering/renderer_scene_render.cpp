@@ -219,6 +219,10 @@ void RendererSceneRender::compositor_effect_set_flag(RID p_effect, RSE::Composit
 	compositor_storage.compositor_effect_set_flag(p_effect, p_flag, p_set);
 }
 
+void RendererSceneRender::compositor_effect_set_render_layers(RID p_effect, const Vector<RenderLayerDeclaration> &p_render_layers) {
+	compositor_storage.compositor_effect_set_render_layers(p_effect, p_render_layers);
+}
+
 /* Compositor API */
 
 RID RendererSceneRender::compositor_allocate() {

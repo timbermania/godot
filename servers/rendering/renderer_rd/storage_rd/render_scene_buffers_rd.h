@@ -31,6 +31,7 @@
 #pragma once
 
 #include "core/templates/hash_map.h"
+#include "core/templates/hash_set.h"
 #include "servers/rendering/renderer_rd/effects/vrs.h"
 #include "servers/rendering/renderer_rd/storage_rd/material_storage.h"
 #include "servers/rendering/renderer_rd/storage_rd/render_buffer_custom_data_rd.h"
@@ -43,6 +44,7 @@
 
 #define RB_SCOPE_BUFFERS SNAME("render_buffers")
 #define RB_SCOPE_VRS SNAME("VRS")
+#define RB_SCOPE_COMPOSITOR_LAYER SNAME("compositor_layer")
 
 #define RB_TEXTURE SNAME("texture")
 #define RB_TEX_COLOR SNAME("color")
@@ -170,6 +172,12 @@ private:
 	void update_sizes(NamedTexture &p_named_texture);
 	void free_named_texture(NamedTexture &p_named_texture);
 
+	// Per-frame render-thread signal: which compositor render-layer ids actually had a member drawn
+	// this frame. Set by the held-out pass (RenderForwardClustered) as each layer's run draws, reset at
+	// the top of each _render_scene. The layer targets in named_textures persist across frames, so this
+	// is the only per-frame "did this layer draw?" answer a consumer (at either stage) can trust.
+	HashSet<uint64_t> compositor_layers_rendered_this_frame;
+
 	// Data buffers
 	mutable HashMap<StringName, Ref<RenderBufferCustomDataRD>> data_buffers;
 
@@ -223,6 +231,27 @@ public:
 	Size2i get_texture_slice_size(const StringName &p_context, const StringName &p_texture_name, const uint32_t p_mipmap);
 
 	void clear_context(const StringName &p_context);
+
+	// Compositor render layers (held-out targets).
+	// Engine-owned, allocate-on-first-access target keyed by a CompositorRenderLayer's
+	// identity (its object id). Two references to the same layer resource resolve to one
+	// target; size (internal render size) and view_count are structural invariants taken
+	// from the scene render buffers, never from the caller. Format is fixed by the layer
+	// resource at first access. Freed with the rest of the named textures in cleanup().
+	RID get_compositor_layer_texture(uint64_t p_layer_id, RD::DataFormat p_data_format);
+
+	// Read-only lookup for consumers (a CompositorEffect reading its layer): returns the
+	// already-allocated target for this layer id, or an empty RID if none was produced this
+	// frame. Never allocates — unlike the format-taking overload the held-out pass uses.
+	virtual RID get_compositor_layer_texture(uint64_t p_layer_id) const override;
+
+	// Per-frame lifecycle backing the read-only consumer contract above. reset_compositor_layers_rendered()
+	// is called once at the top of each scene render (before the held-out pass and the POST_TRANSPARENT
+	// consumer callbacks); mark_compositor_layer_rendered() records a layer whose members actually drew
+	// this frame. Together they let get_compositor_layer_texture(id) const hand a consumer an empty RID for
+	// a layer that had zero held-out members this frame, instead of the persistent (now stale) prior target.
+	void reset_compositor_layers_rendered();
+	void mark_compositor_layer_rendered(uint64_t p_layer_id);
 
 	// Allocate shared buffers
 	void allocate_blur_textures();

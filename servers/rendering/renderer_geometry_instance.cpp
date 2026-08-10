@@ -93,6 +93,10 @@ void RenderGeometryInstanceBase::set_layer_mask(uint32_t p_layer_mask) {
 	layer_mask = p_layer_mask;
 }
 
+void RenderGeometryInstanceBase::set_render_layer(const RenderLayerMembership &p_membership) {
+	render_layer = p_membership;
+}
+
 void RenderGeometryInstanceBase::set_fade_range(bool p_enable_near, float p_near_begin, float p_near_end, bool p_enable_far, float p_far_begin, float p_far_end) {
 	fade_near = p_enable_near;
 	fade_near_begin = p_near_begin;

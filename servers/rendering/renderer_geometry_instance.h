@@ -33,7 +33,9 @@
 #include "core/math/color.h"
 #include "core/math/rect2.h"
 #include "core/math/transform_3d.h"
+#include "core/object/object_id.h"
 #include "core/templates/rid.h"
+#include "servers/rendering/render_layer_membership.h"
 #include "servers/rendering/storage/utilities.h"
 
 // API definition for our RenderGeometryInstance class so we can expose this through GDExtension in the near future
@@ -52,6 +54,9 @@ public:
 	virtual void set_pivot_data(float p_sorting_offset, bool p_use_aabb_center) = 0;
 	virtual void set_lod_bias(float p_lod_bias) = 0;
 	virtual void set_layer_mask(uint32_t p_layer_mask) = 0;
+	// Compositor render-layer membership pushed down from the instance's `CompositorRenderLayer` resource
+	// (see RenderLayerMembership). The render thread reads it here instead of dereferencing the resource.
+	virtual void set_render_layer(const RenderLayerMembership &p_membership) = 0;
 	virtual void set_fade_range(bool p_enable_near, float p_near_begin, float p_near_end, bool p_enable_far, float p_far_begin, float p_far_end) = 0;
 	virtual void set_parent_fade_alpha(float p_alpha) = 0;
 	virtual void set_transparency(float p_transparency) = 0;
@@ -99,6 +104,11 @@ public:
 
 	uint32_t layer_mask = 1;
 
+	// Compositor render-layer membership, pushed down from the member's CompositorRenderLayer resource on
+	// the main thread (so the render thread reads it here instead of dereferencing the resource). Stored so
+	// it survives geometry_instance rebuilds. `render_layer.is_member()` is false when not a member.
+	RenderLayerMembership render_layer;
+
 	bool fade_near = false;
 	float fade_near_begin = 0;
 	float fade_near_end = 0;
@@ -141,6 +151,7 @@ public:
 	virtual void set_pivot_data(float p_sorting_offset, bool p_use_aabb_center) override;
 	virtual void set_lod_bias(float p_lod_bias) override;
 	virtual void set_layer_mask(uint32_t p_layer_mask) override;
+	virtual void set_render_layer(const RenderLayerMembership &p_membership) override;
 	virtual void set_fade_range(bool p_enable_near, float p_near_begin, float p_near_end, bool p_enable_far, float p_far_begin, float p_far_end) override;
 	virtual void set_parent_fade_alpha(float p_alpha) override;
 	virtual void set_transparency(float p_transparency) override;

@@ -509,6 +509,70 @@ void RenderSceneBuffersRD::clear_context(const StringName &p_context) {
 	}
 }
 
+RID RenderSceneBuffersRD::get_compositor_layer_texture(uint64_t p_layer_id, RD::DataFormat p_data_format) {
+	ERR_FAIL_COND_V_MSG(p_layer_id == 0, RID(), "Compositor render layer identity must be a valid object id.");
+
+	// Key on the layer resource's object id so every reference to the same resource
+	// resolves to a single engine-allocated target (no first-writer-wins aliasing).
+	const StringName layer_name = itos(p_layer_id);
+	const NTKey key(RB_SCOPE_COMPOSITOR_LAYER, layer_name);
+	if (named_textures.has(key)) {
+		// Honor the live-edit path: a CompositorRenderLayer `format` edit re-pushes a new RD::DataFormat
+		// here (GeometryInstance3D reconnects to the resource's `changed` signal precisely so this is live).
+		// Every member of a layer resolves the SAME CompositorRenderLayer::get_format(), so members never
+		// disagree on the format and there is no per-member realloc thrash. If the cached target's format
+		// still matches, reuse it; otherwise free and reallocate so the inspector edit actually takes effect
+		// instead of being silently dropped (first-writer-wins on format).
+		NamedTexture &named_texture = named_textures[key];
+		if (named_texture.format.format == p_data_format) {
+			return named_texture.texture;
+		}
+		free_named_texture(named_texture);
+		named_textures.erase(key);
+	}
+
+	// Size and view_count are structural invariants: the target matches the scene's
+	// internal render size and view count by construction, single-sampled (post-resolve).
+	// CAN_COPY_TO lets a SEED_SOURCE_TEXTURE layer copy the bound seed into this target before members draw;
+	// CAN_COPY_FROM lets a CompositorEffect copy the drawn target back out for readback/verification.
+	const uint32_t usage_bits = RD::TEXTURE_USAGE_SAMPLING_BIT | RD::TEXTURE_USAGE_COLOR_ATTACHMENT_BIT | RD::TEXTURE_USAGE_CAN_COPY_FROM_BIT | RD::TEXTURE_USAGE_CAN_COPY_TO_BIT;
+	return create_texture(RB_SCOPE_COMPOSITOR_LAYER, layer_name, p_data_format, usage_bits, RD::TEXTURE_SAMPLES_1, internal_size, view_count, 1, true, false);
+}
+
+RID RenderSceneBuffersRD::get_compositor_layer_texture(uint64_t p_layer_id) const {
+	// Consumer-side, read-only: never allocates, so a CompositorEffect that names a layer no
+	// member drew this frame gets an empty RID rather than a spuriously-created target.
+	if (p_layer_id == 0) {
+		return RID();
+	}
+	// The target texture is a named_texture that PERSISTS across frames (only freed on configure /
+	// clear_context / resize), so has_texture() staying true is not evidence the layer drew THIS frame.
+	// Gate on the per-frame render-thread signal instead: if no member drew into this layer this frame,
+	// hand back an empty RID so the consumer composites nothing rather than last frame's stale target.
+	if (!compositor_layers_rendered_this_frame.has(p_layer_id)) {
+		return RID();
+	}
+	const StringName layer_name = itos(p_layer_id);
+	if (!has_texture(RB_SCOPE_COMPOSITOR_LAYER, layer_name)) {
+		return RID();
+	}
+	return get_texture(RB_SCOPE_COMPOSITOR_LAYER, layer_name);
+}
+
+void RenderSceneBuffersRD::reset_compositor_layers_rendered() {
+	// Called once at the top of each scene render, before the held-out pass repopulates the set and
+	// before the POST_TRANSPARENT consumer callbacks read it. Must run unconditionally (even on a frame
+	// with zero held-out members, whose pass is skipped) — that empty-frame case is the whole point.
+	compositor_layers_rendered_this_frame.clear();
+}
+
+void RenderSceneBuffersRD::mark_compositor_layer_rendered(uint64_t p_layer_id) {
+	if (p_layer_id == 0) {
+		return;
+	}
+	compositor_layers_rendered_this_frame.insert(p_layer_id);
+}
+
 // Allocate shared buffers
 void RenderSceneBuffersRD::allocate_blur_textures() {
 	if (has_texture(RB_SCOPE_BUFFERS, RB_TEX_BLUR_0)) {

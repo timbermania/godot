@@ -31,6 +31,7 @@
 #pragma once
 
 #include "core/variant/variant.h"
+#include "servers/rendering/render_layer_membership.h"
 #include "servers/rendering/rendering_server_enums.h"
 #include "servers/rendering/rendering_server_types.h"
 
@@ -91,6 +92,7 @@ public:
 	virtual void instance_set_surface_override_material(RID p_instance, int p_surface, RID p_material) = 0;
 	virtual void instance_set_visible(RID p_instance, bool p_visible) = 0;
 	virtual void instance_geometry_set_transparency(RID p_instance, float p_transparency) = 0;
+	virtual void instance_geometry_set_render_layer(RID p_instance, const RenderLayerMembership &p_membership) = 0;
 
 	virtual void instance_teleport(RID p_instance) = 0;
 
@@ -147,6 +149,7 @@ public:
 
 	virtual void compositor_effect_set_callback(RID p_compositor, RSE::CompositorEffectCallbackType p_callback_type, const Callable &p_callback) = 0;
 	virtual void compositor_effect_set_flag(RID p_compositor, RSE::CompositorEffectFlags p_flag, bool p_set) = 0;
+	virtual void compositor_effect_set_render_layers(RID p_compositor, const Vector<RenderLayerDeclaration> &p_render_layers) = 0;
 
 	/* COMPOSITOR API */
 
