@@ -1,0 +1,124 @@
+name: 📦 ExMateria Release
+
+# Publishes the editor binary that ExMateria Gambit Tactics needs, so a player
+# does not have to build this fork themselves.
+#
+# WHY ubuntu-22.04 AND NOT ubuntu-latest: the binary's glibc floor is whatever it
+# was BUILT against, and a release nobody can start is worse than no release. A
+# maintainer's Arch desktop produces a binary requiring GLIBC_2.44, which fails to
+# start on Ubuntu 24.04 (2.39), Debian 13 (~2.41) and every other non-rolling
+# distro. 22.04 gives 2.35, which covers 22.04+, Debian 12+, Fedora and Arch. This
+# is the same reason linux_builds.yml pins it — "stay one LTS before latest to
+# increase portability of Linux artifacts".
+#
+# WHY dev_build=no: with target=editor it resolves `optimize` to `speed_trace` —
+# optimized, still usable stack traces. dev_build=yes would resolve it to `none`
+# (-O0) and ship a slow editor with engine asserts on. The flag is encoded in the
+# output FILENAME, not in `godot --version`, which prints 4.8.dev.custom_build for
+# both; the packaging step below asserts on the filename for that reason.
+
+on:
+  push:
+    tags:
+      - 'exmateria-*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to publish as (created if absent). Leave blank to build only.
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  linux-editor:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Setup dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwayland-bin
+
+      - name: Setup Python and SCons
+        uses: ./.github/actions/godot-deps
+
+      - name: Build editor (dev_build=no)
+        run: scons platform=linuxbsd target=editor dev_build=no -j"$(nproc)"
+
+      - name: Package, and prove what was built
+        id: pkg
+        run: |
+          set -euo pipefail
+          BIN=bin/godot.linuxbsd.editor.x86_64
+          # The dev binary is a DIFFERENT filename. If dev_build leaked to yes this
+          # path is absent, so the assert is the flag check.
+          test -f "$BIN" || { echo "::error::$BIN absent — did dev_build leak to yes?"; ls -l bin/; exit 1; }
+          test ! -f bin/godot.linuxbsd.editor.dev.x86_64
+
+          GLIBC=$(objdump -T "$BIN" | grep -o 'GLIBC_[0-9.]*' | sort -V -u | tail -1)
+          FORK=$(git rev-parse --short HEAD)
+          VER=$("$BIN" --version || true)
+
+          NAME="godot-exmateria-${FORK}-linux-x86_64"
+          mkdir -p "dist/$NAME"
+          cp "$BIN" "dist/$NAME/"
+          cp LICENSE.txt COPYRIGHT.txt "dist/$NAME/" 2>/dev/null || true
+          (cd dist && zip -qr "$NAME.zip" "$NAME")
+
+          {
+            echo "glibc=$GLIBC"
+            echo "fork=$FORK"
+            echo "version=$VER"
+            echo "asset=dist/$NAME.zip"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "### Built \`$BIN\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`--version\`: \`$VER\` (says nothing about dev_build — check the filename)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- highest glibc symbol required: \`$GLIBC\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- size: $(du -h "dist/$NAME.zip" | cut -f1) zipped" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload artifact (every run, tag or not)
+        uses: actions/upload-artifact@v4
+        with:
+          name: godot-exmateria-linux-editor-x86_64
+          path: ${{ steps.pkg.outputs.asset }}
+          if-no-files-found: error
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/exmateria-')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          cat > notes.md <<EOF
+          Editor binary for **ExMateria Gambit Tactics** — the Godot 4.8 fork that game
+          requires. Unzip, and either put it on your \`\$PATH\` as \`godot\` or point the
+          project at it.
+
+          | | |
+          |---|---|
+          | built from | \`${{ steps.pkg.outputs.fork }}\` (this fork) |
+          | \`godot --version\` | \`${{ steps.pkg.outputs.version }}\` |
+          | flags | \`platform=linuxbsd target=editor dev_build=no\` (optimized, \`speed_trace\`) |
+          | runs on | glibc **${{ steps.pkg.outputs.glibc }}** or newer — Ubuntu 22.04+, Debian 12+, Fedora, Arch |
+
+          Linux x86_64 only. Nobody has built this fork for Windows or macOS, and the
+          game itself is exercised only on Linux.
+
+          \`godot --version\` prints \`4.8.dev.custom_build.<sha>\` for an optimized build
+          and a \`dev_build=yes\` one alike — that \`dev\` is the engine's version status,
+          not the build type. To confirm the fork, query the primitive:
+          \`RenderingServer.is_compositor_layer_supported()\`.
+          EOF
+          gh release create "$TAG" "${{ steps.pkg.outputs.asset }}" \
+            --title "$TAG — Linux editor (dev_build=no)" \
+            --notes-file notes.md
