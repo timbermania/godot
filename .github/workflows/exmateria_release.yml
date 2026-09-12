@@ -1,6 +1,6 @@
 name: 📦 ExMateria Release
 
-# Publishes the editor binary that ExMateria Gambit Tactics needs, so a player
+# Publishes the editor binaries that ExMateria Gambit Tactics needs, so a player
 # does not have to build this fork themselves.
 #
 # WHY ubuntu-22.04 AND NOT ubuntu-latest: the binary's glibc floor is whatever it
@@ -15,7 +15,13 @@ name: 📦 ExMateria Release
 # optimized, still usable stack traces. dev_build=yes would resolve it to `none`
 # (-O0) and ship a slow editor with engine asserts on. The flag is encoded in the
 # output FILENAME, not in `godot --version`, which prints 4.8.dev.custom_build for
-# both; the packaging step below asserts on the filename for that reason.
+# both, so each build job asserts on the filename. That assert IS the flag check.
+#
+# THE WINDOWS BINARY IS UNVERIFIED. It compiles and links; nobody has run the game
+# on Windows, and the game's own docs say so. It exists because those docs tell a
+# Windows reader to bootstrap under WSL and then run a NATIVE Godot — advice that
+# had no native build to point at. Building it is what makes that path reachable;
+# it is not a claim that the path works.
 
 on:
   push:
@@ -23,22 +29,26 @@ on:
       - 'exmateria-*'
   workflow_dispatch:
     inputs:
-      tag:
-        description: Tag to publish as (created if absent). Leave blank to build only.
-        required: false
+      platforms:
+        description: Which editors to build.
+        type: choice
+        options: [both, linux, windows]
+        default: both
+      publish_to_tag:
+        description: Existing tag to upload the results to. Blank = build only.
         type: string
+        required: false
 
 permissions:
   contents: write
 
 jobs:
   linux-editor:
+    if: inputs.platforms != 'windows'
     runs-on: ubuntu-22.04
     timeout-minutes: 180
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
           fetch-depth: 0
@@ -51,6 +61,11 @@ jobs:
       - name: Setup Python and SCons
         uses: ./.github/actions/godot-deps
 
+      - name: Download pre-built AccessKit
+        shell: sh
+        run: python ./misc/scripts/install_accesskit.py
+        continue-on-error: true
+
       - name: Build editor (dev_build=no)
         run: scons platform=linuxbsd target=editor dev_build=no -j"$(nproc)"
 
@@ -59,8 +74,6 @@ jobs:
         run: |
           set -euo pipefail
           BIN=bin/godot.linuxbsd.editor.x86_64
-          # The dev binary is a DIFFERENT filename. If dev_build leaked to yes this
-          # path is absent, so the assert is the flag check.
           test -f "$BIN" || { echo "::error::$BIN absent — did dev_build leak to yes?"; ls -l bin/; exit 1; }
           test ! -f bin/godot.linuxbsd.editor.dev.x86_64
 
@@ -68,57 +81,162 @@ jobs:
           FORK=$(git rev-parse --short HEAD)
           VER=$("$BIN" --version || true)
 
-          NAME="godot-exmateria-${FORK}-linux-x86_64"
+          NAME="godot-exmateria-${FORK}-linux-editor-x86_64"
           mkdir -p "dist/$NAME"
-          cp "$BIN" "dist/$NAME/"
-          cp LICENSE.txt COPYRIGHT.txt "dist/$NAME/" 2>/dev/null || true
+          cp "$BIN" LICENSE.txt COPYRIGHT.txt "dist/$NAME/"
           (cd dist && zip -qr "$NAME.zip" "$NAME")
 
+          # The notes fragment travels WITH the artifact, so every fact in the
+          # release body was measured on the binary it describes.
           {
-            echo "glibc=$GLIBC"
-            echo "fork=$FORK"
-            echo "version=$VER"
-            echo "asset=dist/$NAME.zip"
-          } >> "$GITHUB_OUTPUT"
+            echo "### Linux x86_64 — \`$BIN\`"
+            echo
+            echo "- \`godot --version\`: \`$VER\`"
+            echo "- built \`platform=linuxbsd target=editor dev_build=no\` (optimized, \`speed_trace\`)"
+            echo "- needs glibc **$GLIBC** or newer — Ubuntu 22.04+, Debian 12+, Fedora, Arch"
+            echo "- exercised: this is the platform the game is developed and tested on"
+          } > "dist/notes-linux.md"
+          echo "dir=dist" >> "$GITHUB_OUTPUT"
 
-          echo "### Built \`$BIN\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- \`--version\`: \`$VER\` (says nothing about dev_build — check the filename)" >> "$GITHUB_STEP_SUMMARY"
-          echo "- highest glibc symbol required: \`$GLIBC\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- size: $(du -h "dist/$NAME.zip" | cut -f1) zipped" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload artifact (every run, tag or not)
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: godot-exmateria-linux-editor-x86_64
-          path: ${{ steps.pkg.outputs.asset }}
+          name: exmateria-linux-editor
+          path: |
+            dist/*.zip
+            dist/notes-linux.md
           if-no-files-found: error
 
-      - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/exmateria-')
+  windows-editor:
+    if: inputs.platforms != 'linux'
+    runs-on: windows-latest
+    timeout-minutes: 180
+    env:
+      SCONS_CACHE_MSVC_CONFIG: true
+      PYTHONIOENCODING: utf8
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Setup Python and SCons
+        uses: ./.github/actions/godot-deps
+
+      # All four are upstream's own steps and all four are non-fatal: the game
+      # renders through Vulkan, so D3D12/ANGLE are not on its path, and AccessKit
+      # skips itself when the SDK is absent (platform/windows/detect.py).
+      - name: Download Direct3D 12 SDK components
+        shell: sh
+        run: python ./misc/scripts/install_d3d12_sdk_windows.py
+        continue-on-error: true
+      - name: Download pre-built ANGLE
+        shell: sh
+        run: python ./misc/scripts/install_angle.py
+        continue-on-error: true
+      - name: Download WinRT components
+        shell: sh
+        run: python ./misc/scripts/install_winrt.py
+        continue-on-error: true
+      - name: Download pre-built AccessKit
+        shell: sh
+        run: python ./misc/scripts/install_accesskit.py
+        continue-on-error: true
+
+      - name: Build editor (dev_build=no)
+        run: scons platform=windows target=editor arch=x86_64 dev_build=no
+
+      - name: Package, and prove what was built
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN=bin/godot.windows.editor.x86_64.exe
+          test -f "$BIN" || { echo "::error::$BIN absent — did dev_build leak to yes?"; ls -l bin/; exit 1; }
+          test ! -f bin/godot.windows.editor.dev.x86_64.exe
+
+          FORK=$(git rev-parse --short HEAD)
+          NAME="godot-exmateria-${FORK}-windows-editor-x86_64"
+          mkdir -p "dist/$NAME"
+          cp "$BIN" LICENSE.txt COPYRIGHT.txt "dist/$NAME/"
+          # Any DLLs scons emitted beside it (ANGLE, D3D12, WinRT) must travel too.
+          cp bin/*.dll "dist/$NAME/" 2>/dev/null || true
+          powershell -Command "Compress-Archive -Path 'dist/$NAME' -DestinationPath 'dist/$NAME.zip'"
+
+          {
+            echo "### Windows x86_64 — \`$BIN\` ⚠️ UNVERIFIED"
+            echo
+            echo "- built \`platform=windows target=editor arch=x86_64 dev_build=no\` with MSVC"
+            echo "- **nobody has run the game on Windows.** CI proves this compiles and"
+            echo "  links, nothing more — the same standing as the project's Windows SPU"
+            echo "  DLLs. If you try it, please report what happens."
+            echo "- bootstrap the assets under WSL or Git Bash (the tools are bash), then"
+            echo "  run this editor natively — WSLg reaches the GPU only through a D3D12"
+            echo "  translation layer, which is the wrong substrate for this renderer."
+          } > "dist/notes-windows.md"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: exmateria-windows-editor
+          path: |
+            dist/*.zip
+            dist/notes-windows.md
+          if-no-files-found: error
+
+  publish:
+    needs: [linux-editor, windows-editor]
+    # always(): a platform the run skipped must not block publishing the other.
+    if: always() && (startsWith(github.ref, 'refs/tags/exmateria-') || inputs.publish_to_tag != '')
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: exmateria-*-editor
+          merge-multiple: true
+          path: dist
+
+      - name: Create or update the release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.publish_to_tag || github.ref_name }}
         run: |
-          cat > notes.md <<EOF
-          Editor binary for **ExMateria Gambit Tactics** — the Godot 4.8 fork that game
-          requires. Unzip, and either put it on your \`\$PATH\` as \`godot\` or point the
-          project at it.
+          set -euo pipefail
+          ls -l dist/
 
-          | | |
-          |---|---|
-          | built from | \`${{ steps.pkg.outputs.fork }}\` (this fork) |
-          | \`godot --version\` | \`${{ steps.pkg.outputs.version }}\` |
-          | flags | \`platform=linuxbsd target=editor dev_build=no\` (optimized, \`speed_trace\`) |
-          | runs on | glibc **${{ steps.pkg.outputs.glibc }}** or newer — Ubuntu 22.04+, Debian 12+, Fedora, Arch |
+          {
+            echo "Editor binaries for **ExMateria Gambit Tactics** — the Godot 4.8 fork"
+            echo "that game requires. Unzip, and either put it on your \`\$PATH\` as"
+            echo "\`godot\` or point the project at it."
+            echo
+            cat dist/notes-linux.md 2>/dev/null || true
+            echo
+            cat dist/notes-windows.md 2>/dev/null || true
+            echo
+            echo "---"
+            echo
+            echo "\`godot --version\` prints \`4.8.dev.custom_build.<sha>\` for an optimized"
+            echo "build and a \`dev_build=yes\` one alike — that \`dev\` is the engine's"
+            echo "version status, not the build type. To confirm you have the fork rather"
+            echo "than a stock 4.8, query the primitive it adds:"
+            echo "\`RenderingServer.is_compositor_layer_supported()\`."
+          } > notes.md
 
-          Linux x86_64 only. Nobody has built this fork for Windows or macOS, and the
-          game itself is exercised only on Linux.
-
-          \`godot --version\` prints \`4.8.dev.custom_build.<sha>\` for an optimized build
-          and a \`dev_build=yes\` one alike — that \`dev\` is the engine's version status,
-          not the build type. To confirm the fork, query the primitive:
-          \`RenderingServer.is_compositor_layer_supported()\`.
-          EOF
-          gh release create "$TAG" "${{ steps.pkg.outputs.asset }}" \
-            --title "$TAG — Linux editor (dev_build=no)" \
-            --notes-file notes.md
+          # Idempotent on purpose: a re-run, or a second platform published later
+          # against the same tag, must add assets instead of failing.
+          #
+          # ⚠️ notes.md is only written back when BOTH fragments are present. A
+          # windows-only run carries no notes-linux.md, so rewriting the body from
+          # it would DELETE the Linux section from a release that still ships the
+          # Linux zip — the notes would then describe less than the assets do.
+          FRAGMENTS=$(ls dist/notes-*.md 2>/dev/null | wc -l)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/*.zip --clobber
+            if [ "$FRAGMENTS" -ge 2 ]; then
+              gh release edit "$TAG" --notes-file notes.md
+            else
+              echo "::notice::partial run ($FRAGMENTS fragment) — assets uploaded, existing notes left intact"
+            fi
+          else
+            gh release create "$TAG" dist/*.zip \
+              --title "$TAG — editor binaries (dev_build=no)" \
+              --notes-file notes.md
+          fi
