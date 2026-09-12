@@ -142,7 +142,17 @@ jobs:
         run: python ./misc/scripts/install_accesskit.py
         continue-on-error: true
 
+      # ⚠️ `shell: sh` IS LOAD-BEARING, it is not a style choice. Both
+      # misc/scripts/install_*.py and platform/windows/detect.py choose their deps
+      # folder with the SAME test — `LOCALAPPDATA` and not `MSYSTEM` →
+      # %LOCALAPPDATA%\Godot\build_deps, else bin/build_deps. The runner's `sh` is
+      # MSYS and sets MSYSTEM, so the installers above write to bin/build_deps;
+      # under the default pwsh scons sees no MSYSTEM, looks in %LOCALAPPDATA% and
+      # finds nothing, and every SDK-backed driver errors out as uninstalled. The
+      # two halves must run under the same shell. Upstream's godot-build action is
+      # `shell: sh` for this reason.
       - name: Build editor (dev_build=no)
+        shell: sh
         run: scons platform=windows target=editor arch=x86_64 dev_build=no
 
       - name: Package, and prove what was built
@@ -153,6 +163,8 @@ jobs:
           test -f "$BIN" || { echo "::error::$BIN absent — did dev_build leak to yes?"; ls -l bin/; exit 1; }
           test ! -f bin/godot.windows.editor.dev.x86_64.exe
 
+          # Weak, but not nothing: prove the thing STARTS before shipping it.
+          "./$BIN" --version
           FORK=$(git rev-parse --short HEAD)
           NAME="godot-exmateria-${FORK}-windows-editor-x86_64"
           mkdir -p "dist/$NAME"
@@ -165,9 +177,10 @@ jobs:
             echo "### Windows x86_64 — \`$BIN\` ⚠️ UNVERIFIED"
             echo
             echo "- built \`platform=windows target=editor arch=x86_64 dev_build=no\` with MSVC"
-            echo "- **nobody has run the game on Windows.** CI proves this compiles and"
-            echo "  links, nothing more — the same standing as the project's Windows SPU"
-            echo "  DLLs. If you try it, please report what happens."
+            echo "- **nobody has run the game on Windows.** CI proves it compiles, links"
+            echo "  and answers \`--version\` on a clean runner — nothing about whether the"
+            echo "  game plays. Same standing as the project's Windows SPU DLLs. If you try"
+            echo "  it, please report what happens."
             echo "- bootstrap the assets under WSL or Git Bash (the tools are bash), then"
             echo "  run this editor natively — WSLg reaches the GPU only through a D3D12"
             echo "  translation layer, which is the wrong substrate for this renderer."
@@ -200,6 +213,14 @@ jobs:
           TAG: ${{ inputs.publish_to_tag || github.ref_name }}
         run: |
           set -euo pipefail
+          # A failed build job leaves no artifact at all, and `ls` under `set -e`
+          # turned that into a SECOND red step reporting a missing directory rather
+          # than the build that actually failed. The run is already red; say what
+          # happened and stop.
+          if ! ls dist/*.zip >/dev/null 2>&1; then
+            echo "::warning::no artifacts to publish — a build job must have failed"
+            exit 0
+          fi
           ls -l dist/
 
           {
