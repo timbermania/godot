@@ -5266,15 +5266,13 @@ void RenderingDeviceDriverVulkan::command_bind_push_constants(CommandBufferID p_
 
 // ----- CACHE -----
 
-int RenderingDeviceDriverVulkan::caching_instance_count = 0;
-
 bool RenderingDeviceDriverVulkan::pipeline_cache_create(const Vector<uint8_t> &p_data) {
-	if (caching_instance_count) {
-		WARN_PRINT("There's already a RenderingDeviceDriverVulkan instance doing PSO caching. Only one can at the same time. This one won't.");
-		return false;
-	}
-	caching_instance_count++;
-
+	// Several instances may cache at once. Every byte of cache state — the VkPipelineCache
+	// handle, the serialization buffer, the size bookkeeping — lives in this driver's own
+	// `pipelines_cache`, and two VkPipelineCache objects on one VkDevice are independent as
+	// far as Vulkan is concerned. What the caller must keep apart is the FILE: RenderingDevice
+	// gives a local device its own path and saves it write-then-rename, so instances neither
+	// read each other's blob nor leave a torn one behind.
 	pipelines_cache.current_size = 0;
 	pipelines_cache.buffer.resize(sizeof(PipelineCacheHeader));
 
@@ -5330,9 +5328,6 @@ void RenderingDeviceDriverVulkan::pipeline_cache_free() {
 
 	vkDestroyPipelineCache(vk_device, pipelines_cache.vk_cache, VKC::get_allocation_callbacks(VK_OBJECT_TYPE_PIPELINE_CACHE));
 	pipelines_cache.vk_cache = VK_NULL_HANDLE;
-
-	DEV_ASSERT(caching_instance_count > 0);
-	caching_instance_count--;
 }
 
 size_t RenderingDeviceDriverVulkan::pipeline_cache_query_size() {

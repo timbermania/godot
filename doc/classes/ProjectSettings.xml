@@ -3371,6 +3371,11 @@
 			Enable the pipeline cache that is saved to disk if the graphics API supports it.
 			[b]Note:[/b] This property is unable to control the pipeline caching the GPU driver itself does. Only turn this off along with deleting the contents of the driver's cache if you wish to simulate the experience a user will get when starting the game for the first time.
 		</member>
+		<member name="rendering/rendering_device/pipeline_cache/enable_local_devices" type="bool" setter="" getter="" default="false">
+			If [code]true[/code], a local [RenderingDevice] (one created with [method RenderingServer.create_local_rendering_device]) also keeps a pipeline cache on disk, in its own file beside the renderer's. Without this, only the main rendering device caches its pipelines, and a compute job that builds its pipelines on a local device pays the driver's full compile on every launch.
+			Off by default because local devices are created by user code: enable it when the project makes the same few pipelines every run, and leave it off when it makes many different ones, since the file only grows.
+			Has no effect unless [member rendering/rendering_device/pipeline_cache/enable] is also [code]true[/code].
+		</member>
 		<member name="rendering/rendering_device/pipeline_cache/save_chunk_size_mb" type="float" setter="" getter="" default="3.0">
 			Determines at which interval pipeline cache is saved to disk. The lower the value, the more often it is saved.
 		</member>

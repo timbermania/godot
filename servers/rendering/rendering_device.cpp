@@ -8577,13 +8577,21 @@ Error RenderingDevice::initialize(RenderingContextDriver *p_context, DisplayServ
 	raytracing_list = RaytracingList();
 
 	bool project_pipeline_cache_enable = GLOBAL_GET("rendering/rendering_device/pipeline_cache/enable");
-	if (is_main_instance && project_pipeline_cache_enable) {
-		// Only the instance that is not a local device and is also the singleton is allowed to manage a pipeline cache.
+	bool local_pipeline_cache_enable = GLOBAL_GET("rendering/rendering_device/pipeline_cache/enable_local_devices");
+	if (project_pipeline_cache_enable && (is_main_instance || local_pipeline_cache_enable)) {
+		// The singleton non-local instance always manages the project's pipeline cache. A local
+		// device only does so when the project opts in, because local devices are created by user
+		// code: there may be several of them, in several processes, all sharing one `user://`.
+		// They get their own file so they can never clobber the renderer's, and the save below is
+		// atomic so two of them racing cannot leave a torn one.
 		pipeline_cache_file_path = vformat("user://vulkan/pipelines.%s.%s",
 				OS::get_singleton()->get_current_rendering_method(),
 				device.name.validate_filename().replace_char(' ', '_').to_lower());
 		if (Engine::get_singleton()->is_editor_hint()) {
 			pipeline_cache_file_path += ".editor";
+		}
+		if (!is_main_instance) {
+			pipeline_cache_file_path += ".local";
 		}
 		pipeline_cache_file_path += ".cache";
 
@@ -8669,9 +8677,19 @@ void RenderingDevice::_save_pipeline_cache(void *p_data) {
 	}
 	print_verbose(vformat("Updated PSO cache (%.1f MiB)", cache_blob.size() / (1024.0f * 1024.0f)));
 
-	Ref<FileAccess> f = FileAccess::open(self->pipeline_cache_file_path, FileAccess::WRITE, nullptr);
-	if (f.is_valid()) {
+	// Write-then-rename rather than truncate-in-place. A torn cache is not fatal (the driver
+	// rejects a malformed blob and starts over), but local devices make concurrent writers
+	// ordinary: one `user://` can be shared by every process on the machine.
+	String temp_path = vformat("%s.%d.tmp", self->pipeline_cache_file_path, OS::get_singleton()->get_process_id());
+	{
+		Ref<FileAccess> f = FileAccess::open(temp_path, FileAccess::WRITE, nullptr);
+		if (f.is_null()) {
+			return;
+		}
 		f->store_buffer(cache_blob);
+	}
+	if (DirAccess::rename_absolute(temp_path, self->pipeline_cache_file_path) != OK) {
+		DirAccess::remove_absolute(temp_path);
 	}
 }
 
@@ -9207,6 +9225,12 @@ void RenderingDevice::_bind_methods() {
 #endif
 
 	ClassDB::bind_method(D_METHOD("create_local_device"), &RenderingDevice::create_local_device);
+
+	// Re-pins the render-thread guard to the calling thread, so a local device built on a
+	// worker thread (along with every shader and pipeline on it) can be handed to another
+	// thread and used there. Public C++ since 4.0 but never bound; a compute job that wants
+	// to pay its pipeline compile off the main thread has no other way to deliver the result.
+	ClassDB::bind_method(D_METHOD("make_current"), &RenderingDevice::make_current);
 
 	ClassDB::bind_method(D_METHOD("set_resource_name", "id", "name"), &RenderingDevice::set_resource_name);
 

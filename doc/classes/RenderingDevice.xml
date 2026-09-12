@@ -808,6 +808,13 @@
 				Limits for various graphics hardware can be found in the [url=https://vulkan.gpuinfo.org/]Vulkan Hardware Database[/url].
 			</description>
 		</method>
+		<method name="make_current">
+			<description>
+				Re-binds this local [RenderingDevice] to the calling thread, making it and every resource created on it usable from that thread.
+				A local [RenderingDevice] is thread-affine: it may only be used from the thread it was created on, and every other thread fails with [i]"This function can only be called from the render thread"[/i]. Call this from the thread that is taking the device over, after the creating thread has stopped using it. This is what makes it possible to build shaders and compute pipelines on a background thread — the expensive part of a compute job — and then hand the finished device to the main thread.
+				[b]Note:[/b] The two threads must not use the device concurrently. This transfers ownership; it does not share it.
+			</description>
+		</method>
 		<method name="raytracing_list_begin" experimental="">
 			<return type="int" />
 			<description>

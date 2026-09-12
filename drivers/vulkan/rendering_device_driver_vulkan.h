@@ -599,7 +599,6 @@ private:
 		VkPipelineCache vk_cache = VK_NULL_HANDLE;
 	};
 
-	static int caching_instance_count;
 	PipelineCache pipelines_cache;
 	String pipeline_cache_id;
 	HashMap<uint64_t, bool> has_comp_alpha;
