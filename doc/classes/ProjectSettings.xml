@@ -3375,6 +3375,10 @@
 			If [code]true[/code], a local [RenderingDevice] (one created with [method RenderingServer.create_local_rendering_device]) also keeps a pipeline cache on disk, in its own file beside the renderer's. Without this, only the main rendering device caches its pipelines, and a compute job that builds its pipelines on a local device pays the driver's full compile on every launch.
 			Off by default because local devices are created by user code: enable it when the project makes the same few pipelines every run, and leave it off when it makes many different ones, since the file only grows.
 			Has no effect unless [member rendering/rendering_device/pipeline_cache/enable] is also [code]true[/code].
+			[b]Note:[/b] The file only grows, so it is capped by [member rendering/rendering_device/pipeline_cache/local_max_size_mb].
+		</member>
+		<member name="rendering/rendering_device/pipeline_cache/local_max_size_mb" type="float" setter="" getter="" default="32.0">
+			The largest local-device pipeline cache file (see [member rendering/rendering_device/pipeline_cache/enable_local_devices]) that is loaded at startup, in MiB. Nothing is ever evicted from a pipeline cache, and every process that creates a local [RenderingDevice] reads the whole file and hands it to the driver, so a file grown by many different pipelines costs memory and startup time in each of them. A file over this size is not loaded: the device starts with an empty cache, and its next save replaces the file with one holding only what that device built. [code]0[/code] disables the cap.
 		</member>
 		<member name="rendering/rendering_device/pipeline_cache/save_chunk_size_mb" type="float" setter="" getter="" default="3.0">
 			Determines at which interval pipeline cache is saved to disk. The lower the value, the more often it is saved.

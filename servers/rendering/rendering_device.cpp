@@ -8595,7 +8595,25 @@ Error RenderingDevice::initialize(RenderingContextDriver *p_context, DisplayServ
 		}
 		pipeline_cache_file_path += ".cache";
 
-		Vector<uint8_t> cache_data = _load_pipeline_cache();
+		// Nothing evicts from a pipeline cache: every pipeline any run compiles is merged in
+		// and saved back. For the renderer that set is bounded by the project's shaders; a
+		// local device's is whatever user code ever built, across every version of it that
+		// shared this `user://`, and the whole file is read and handed to the driver on each
+		// start. Over the cap it is not loaded, so this device starts empty and its next
+		// save writes a file holding only what it actually built.
+		Vector<uint8_t> cache_data;
+		const double local_max_size_mb = GLOBAL_GET("rendering/rendering_device/pipeline_cache/local_max_size_mb");
+		uint64_t file_size = 0;
+		if (!is_main_instance && FileAccess::exists(pipeline_cache_file_path)) {
+			Ref<FileAccess> f = FileAccess::open(pipeline_cache_file_path, FileAccess::READ);
+			file_size = f.is_valid() ? f->get_length() : 0;
+		}
+		if (local_max_size_mb > 0.0 && file_size > uint64_t(local_max_size_mb * 1024.0 * 1024.0)) {
+			print_line(vformat("Local PSO cache %s is %.1f MiB, over the %.1f MiB cap (rendering/rendering_device/pipeline_cache/local_max_size_mb): starting it empty.",
+					pipeline_cache_file_path, file_size / (1024.0 * 1024.0), local_max_size_mb));
+		} else {
+			cache_data = _load_pipeline_cache();
+		}
 		pipeline_cache_enabled = driver->pipeline_cache_create(cache_data);
 		if (pipeline_cache_enabled) {
 			pipeline_cache_size = driver->pipeline_cache_query_size();
